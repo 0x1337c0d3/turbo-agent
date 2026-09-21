@@ -1,0 +1,25 @@
+name: TurboFieldfareAgent
+options:
+  bundleIdPrefix: com.onereddog
+  deploymentTarget:
+    macOS: "26.0"
+packages:
+  LocalPackage:
+    path: .
+targets:
+  TurboFieldfareAgentMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/TurboFieldfareAgentApp
+    dependencies:
+      - package: LocalPackage
+        product: TurboFieldfareAgentCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.onereddog.turbofieldfareagent
+        PRODUCT_NAME: TurboFieldfareAgent
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: TurboFieldfareAgent.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
