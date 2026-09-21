@@ -1,4 +1,4 @@
-# TurboFieldfare Agent
+# Turbo Agent
 
 A standalone native coding agent for macOS, designed for small context windows.
 It supports Apple Foundation Models (AFM 3 Core and Cloud Pro via Private Cloud
@@ -17,12 +17,47 @@ the TurboFieldfare Gemma/Metal runtime or model files.
 ## Build and run
 
 ```bash
-swift build -c release --product TurboFieldfareAgent
-swift build -c release --product TurboFieldfareAgentMac
-
-.build/release/TurboFieldfareAgent --backend openai
-.build/release/TurboFieldfareAgentMac
+make build
+make run RUN_ARGS="--backend openai"
 ```
+
+`make build` builds both executable products in release mode:
+
+```text
+.build/release/TurboAgent
+.build/release/TurboAgentMac
+```
+
+The first product is the terminal and ACP executable. The second is the native
+SwiftUI executable; a Swift package build does not wrap it in an `.app` bundle.
+Set `CONFIGURATION=debug` on any build-related Make target for a debug build.
+
+Build and sign the PCC-enabled CLI app bundle:
+
+```bash
+make build-app
+.build/release/TurboAgent.app/Contents/MacOS/TurboAgent --backend apple --pcc require
+```
+
+This requires a provisioning profile with the Private Cloud Compute entitlement
+and its matching code-signing identity. `Scripts/package-agent.sh` writes the
+bundle to `.build/release/TurboAgent.app` by default.
+
+Install the command-line executable under `/usr/local/bin`:
+
+```bash
+sudo make install
+```
+
+For a user-local installation, ensure `~/.local/bin` is on `PATH` and run:
+
+```bash
+make install PREFIX="$HOME/.local"
+```
+
+The install target only installs the command-line executable. It supports
+`BINDIR` and `DESTDIR` overrides for custom and staged installations. The
+SwiftUI executable and PCC-enabled app bundle retain their separate workflows.
 
 Select the Apple backend with `--backend apple` and choose its PCC policy with
 `--pcc disable`, `auto`, or `require`. Tool calls require approval unless the
@@ -30,7 +65,7 @@ terminal agent is launched with `--yolo`.
 
 For OpenAI or a compatible endpoint, set `OPENAI_API_KEY`, and optionally
 `OPENAI_BASE_URL` and `OPENAI_MODEL`. Persistent settings are read from
-`~/.config/TurboFieldfareAgent/settings.json`.
+`~/.config/TurboAgent/settings.json`.
 
 The default prompt is `.agents/codex_prompt.md`; the compact
 `.agents/codex_prompt_8k.md` variant is intended for 8K context windows.
@@ -38,12 +73,11 @@ The default prompt is `.agents/codex_prompt.md`; the compact
 ## Test
 
 ```bash
-Scripts/test.sh
-python3 Scripts/test-agent-editor.py
-python3 Scripts/test-agent-transcript.py
-ruby Scripts/check_tracked_symlinks.rb
-ruby Scripts/check_markdown_links.rb
+make test
 ```
+
+This runs the serial Swift test suite, terminal editor and transcript tests,
+and the tracked-symlink and Markdown-link checks.
 
 ## Documentation
 
@@ -55,7 +89,7 @@ ruby Scripts/check_markdown_links.rb
 - [AFM 3 PCC notes](docs/afm3-pcc.md)
 - [ContinuityCore](Sources/ContinuityCore/README.md)
 
-The `project.yml` XcodeGen project and `TurboFieldfareAgent.entitlements` are
+The `project.yml` XcodeGen project and `TurboAgent.entitlements` are
 provided for builds that require the Private Cloud Compute entitlement.
 
 ## License

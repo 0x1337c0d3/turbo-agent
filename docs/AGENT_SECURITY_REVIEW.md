@@ -1,4 +1,4 @@
-# Security review — TurboFieldfareAgent
+# Security review — TurboAgent
 
 Date: 2026-09-16. Scope: current agent sources and model-free regression tests.
 Method: manual static analysis using the Sentinel security audit skill, plus
@@ -64,7 +64,7 @@ code. The review does not establish dependency CVE status.
 
 ## Validation
 
-Command: `Scripts/test.sh --filter TurboFieldfareAgentTests`.
+Command: `Scripts/test.sh --filter TurboAgentTests`.
 Exit code: 0. Build footer: `Build complete! (4.06 sec.)`.
 Test footer: `Executed 29 tests, with 0 failures (0 unexpected) in 3.685 (3.689) seconds`.
 Tests cover approval decisions, control escaping, same-origin URL checks,

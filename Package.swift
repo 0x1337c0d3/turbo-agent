@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-  name: "TurboFieldfareAgent",
+  name: "TurboAgent",
   platforms: [
     .macOS(.v26)
   ],
   products: [
-    .executable(name: "TurboFieldfareAgent", targets: ["TurboFieldfareAgentCLI"]),
-    .library(name: "TurboFieldfareAgentCore", targets: ["TurboFieldfareAgentCore"]),
-    .executable(name: "TurboFieldfareAgentMac", targets: ["TurboFieldfareAgentMac"]),
+    .executable(name: "TurboAgent", targets: ["TurboAgentCLI"]),
+    .library(name: "TurboAgentCore", targets: ["TurboAgentCore"]),
+    .executable(name: "TurboAgentMac", targets: ["TurboAgentMac"]),
   ],
   targets: [
     .target(
@@ -22,27 +22,27 @@ let package = Package(
       linkerSettings: [.linkedLibrary("edit")]
     ),
     .target(
-      name: "TurboFieldfareAgentCore",
+      name: "TurboAgentCore",
       dependencies: [
         "AgentLineEditor",
         "ContinuityCore",
       ],
-      path: "Sources/TurboFieldfareAgent"
+      path: "Sources/TurboAgent"
     ),
     .executableTarget(
-      name: "TurboFieldfareAgentCLI",
-      dependencies: ["TurboFieldfareAgentCore"],
-      path: "Sources/TurboFieldfareAgentCLI"
+      name: "TurboAgentCLI",
+      dependencies: ["TurboAgentCore"],
+      path: "Sources/TurboAgentCLI"
     ),
     .executableTarget(
-      name: "TurboFieldfareAgentMac",
-      dependencies: ["TurboFieldfareAgentCore"],
-      path: "Sources/TurboFieldfareAgentApp"
+      name: "TurboAgentMac",
+      dependencies: ["TurboAgentCore"],
+      path: "Sources/TurboAgentApp"
     ),
     .testTarget(
-      name: "TurboFieldfareAgentTests",
-      dependencies: ["TurboFieldfareAgentCore"],
-      path: "Tests/TurboFieldfareAgent"
+      name: "TurboAgentTests",
+      dependencies: ["TurboAgentCore"],
+      path: "Tests/TurboAgent"
     ),
   ]
 )

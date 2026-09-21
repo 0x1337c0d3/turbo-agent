@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Packages and signs TurboFieldfareAgent.app with the Apple Private Cloud Compute (PCC)
+# Packages and signs TurboAgent.app with the Apple Private Cloud Compute (PCC)
 # managed provisioning profile and matching keychain identity.
 
 CONFIG="${1:-release}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BIN_PATH="$ROOT_DIR/.build/$CONFIG/TurboFieldfareAgent"
-APP_PATH="$ROOT_DIR/.build/$CONFIG/TurboFieldfareAgent.app"
-ENTITLEMENTS="$ROOT_DIR/TurboFieldfareAgent.entitlements"
+BIN_PATH="$ROOT_DIR/.build/$CONFIG/TurboAgent"
+APP_PATH="$ROOT_DIR/.build/$CONFIG/TurboAgent.app"
+ENTITLEMENTS="$ROOT_DIR/TurboAgent.entitlements"
 
 if [ ! -f "$BIN_PATH" ]; then
     echo "Error: Binary not found at $BIN_PATH"
@@ -78,7 +78,7 @@ echo "Signing with matching identity: $IDENTITY"
 
 # Assemble bundle
 mkdir -p "$APP_PATH/Contents/MacOS"
-cp -f "$BIN_PATH" "$APP_PATH/Contents/MacOS/TurboFieldfareAgent"
+cp -f "$BIN_PATH" "$APP_PATH/Contents/MacOS/TurboAgent"
 cp -f "$PROFILE_PATH" "$APP_PATH/Contents/embedded.provisionprofile"
 
 cat << 'EOF' > "$APP_PATH/Contents/Info.plist"
@@ -87,11 +87,11 @@ cat << 'EOF' > "$APP_PATH/Contents/Info.plist"
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>TurboFieldfareAgent</string>
+    <string>TurboAgent</string>
     <key>CFBundleIdentifier</key>
     <string>com.onereddog.turbofieldfareagent</string>
     <key>CFBundleName</key>
-    <string>TurboFieldfareAgent</string>
+    <string>TurboAgent</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -103,9 +103,9 @@ cat << 'EOF' > "$APP_PATH/Contents/Info.plist"
 EOF
 
 # Sign binary and bundle
-codesign --force --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/TurboFieldfareAgent"
+codesign --force --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_PATH/Contents/MacOS/TurboAgent"
 codesign --force --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_PATH"
 
 echo "Successfully packaged and signed: $APP_PATH"
 echo "Run with PCC:"
-echo "  $APP_PATH/Contents/MacOS/TurboFieldfareAgent --backend apple --pcc require"
+echo "  $APP_PATH/Contents/MacOS/TurboAgent --backend apple --pcc require"

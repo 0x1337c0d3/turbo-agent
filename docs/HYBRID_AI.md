@@ -1,14 +1,14 @@
 # Agent inference backends
 
-`TurboFieldfareAgentCore` is independent of TurboFieldfare's Gemma/Metal
+`TurboAgentCore` is independent of Turbo's Gemma/Metal
 runtime. It owns API-neutral conversation, tool, and JSON schema types and has
-no dependency on `TurboFieldfare`, `TurboFieldfareCLICore`, or
-`TurboFieldfareServerCore`.
+no dependency on `Turbo`, `TurboCLICore`, or
+`TurboServerCore`.
 
 Two front ends consume the core:
 
-- `TurboFieldfareAgent` is the terminal REPL and ACP server.
-- `TurboFieldfareAgentMac` is the native SwiftUI chat app.
+- `TurboAgent` is the terminal REPL and ACP server.
+- `TurboAgentMac` is the native SwiftUI chat app.
 
 Both support three concrete targets: AFM 3 Core on-device, AFM Cloud Pro over
 Private Cloud Compute, and an OpenAI-compatible Chat Completions endpoint.
@@ -20,9 +20,9 @@ silently sent to a different provider.
 The CLI selects a backend explicitly:
 
 ```bash
-TurboFieldfareAgent --backend apple --pcc disable
-TurboFieldfareAgent --backend apple --pcc require
-TurboFieldfareAgent --backend openai
+TurboAgent --backend apple --pcc disable
+TurboAgent --backend apple --pcc require
+TurboAgent --backend openai
 ```
 
 OpenAI-compatible settings can be provided directly through the environment:
@@ -33,7 +33,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1/
 export OPENAI_MODEL=gpt-4o
 ```
 
-The existing `~/.config/TurboFieldfareAgent/settings.json` is also supported:
+The existing `~/.config/TurboAgent/settings.json` is also supported:
 
 ```json
 {

@@ -9,7 +9,7 @@ after preview. ACP and `AgentClient` approval requests carry the same preview.
 In `--yolo` mode the terminal still displays the preview, but does not pause for
 approval.
 
-In the interactive `TurboFieldfareAgent` terminal, **Ctrl-O** expands all retained
+In the interactive `TurboAgent` terminal, **Ctrl-O** expands all retained
 tool responses in place. Press it again to return to their compact previews
 (normally 300 characters). The choice also applies to subsequent tool results.
 The response shows a shortcut hint beside its output.
@@ -56,7 +56,7 @@ tool output, and terminal decoration are excluded. The command reports when
 there is no answer to copy or the clipboard write fails. It does not submit a
 prompt to the model.
 
-Verification for `/copy`: `swift build --target TurboFieldfareAgent` exited 0
+Verification for `/copy`: `swift build --target TurboAgent` exited 0
 with `Build complete! (11.77 sec.)` on base commit
 `199855c0bd523c7ce275d3227fd92cf8579910fc` plus local changes, Mac14,9 / Apple
 M2 Pro / 32 GB RAM, macOS 26.6.2 (25G83), Apple Swift 6.4
@@ -91,7 +91,7 @@ Compiler: Apple Swift 6.4 (`swiftlang-6.4.0.34.1`,
 
 | Exact command | Exit | Completion footer |
 | --- | --- | --- |
-| `swift build --target TurboFieldfareAgent` | 0 | `Build complete! (11.89 sec.)` |
+| `swift build --target TurboAgent` | 0 | `Build complete! (11.89 sec.)` |
 | `Scripts/test.sh --filter 'TerminalTranscriptTests\|StatusLineTests\|SecurityTests'` | 0 | `Build complete! (15.81 sec.)`; `Executed 15 tests, with 0 failures (0 unexpected) in 0.007 (0.010) seconds` |
 | `Scripts/test.sh --filter 'TerminalTranscriptTests\|StatusLineTests\|SecurityTests\|ACPExecutableTests'` | 0 | `Build complete! (6.05 sec.)`; `Executed 19 tests, with 0 failures (0 unexpected) in 1.034 (1.039) seconds` |
 | `python3 Scripts/test-agent-editor.py` | 0 | `31 terminal editor checks passed.` |
@@ -100,7 +100,7 @@ Compiler: Apple Swift 6.4 (`swiftlang-6.4.0.34.1`,
 The final package-test timing footer was:
 
 ```text
-Test Suite 'TurboFieldfareAgentTests.xctest' passed at 2026-09-16 15:41:38.756.
+Test Suite 'TurboAgentTests.xctest' passed at 2026-09-16 15:41:38.756.
      Executed 19 tests, with 0 failures (0 unexpected) in 1.034 (1.038) seconds
 Test Suite 'Selected tests' passed at 2026-09-16 15:41:38.756.
      Executed 19 tests, with 0 failures (0 unexpected) in 1.034 (1.039) seconds

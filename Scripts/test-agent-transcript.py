@@ -215,10 +215,10 @@ def main():
         executable = directory / 'transcript'
         subprocess.run(['swiftc', '-module-cache-path', str(directory / 'module-cache'),
                         '-import-objc-header', str(include / 'AgentLineEditor.h'),
-                        str(ROOT / 'Sources/TurboFieldfareAgent/Terminal/TerminalText.swift'),
-                        str(ROOT / 'Sources/TurboFieldfareAgent/Terminal/TerminalTranscript.swift'),
-                        str(ROOT / 'Sources/TurboFieldfareAgent/Terminal/StatusLine.swift'),
-                        str(ROOT / 'Sources/TurboFieldfareAgent/Terminal/TerminalGeneration.swift'),
+                        str(ROOT / 'Sources/TurboAgent/Terminal/TerminalText.swift'),
+                        str(ROOT / 'Sources/TurboAgent/Terminal/TerminalTranscript.swift'),
+                        str(ROOT / 'Sources/TurboAgent/Terminal/StatusLine.swift'),
+                        str(ROOT / 'Sources/TurboAgent/Terminal/TerminalGeneration.swift'),
                         str(source), str(editor), '-ledit', '-o', str(executable)], check=True)
         for number, (name, draft, toggle, expected) in enumerate(cases):
             terminal = TranscriptTerminal(executable, directory / f'history-{number}')

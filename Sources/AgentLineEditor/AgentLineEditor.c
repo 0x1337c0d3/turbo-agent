@@ -352,7 +352,7 @@ char *agent_read_prompt(const char *prompt, const char *history_path) {
 
 char *agent_read_prompt_with_transcript(const char *prompt, const char *history_path,
                                       agent_transcript_action action) {
-    EditLine *editor = el_init("TurboFieldfareAgent", stdin, stdout, stderr);
+    EditLine *editor = el_init("TurboAgent", stdin, stdout, stderr);
     if (!editor) return NULL;
     History *entries = history_init();
     HistEvent event;

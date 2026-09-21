@@ -1,6 +1,6 @@
 # Agent MCP settings
 
-TurboFieldfareAgent reads `~/.config/TurboFieldfareAgent/settings.json` at
+TurboAgent reads `~/.config/TurboAgent/settings.json` at
 startup and when you enter `/mcp reload`. Use `/mcp` to see configured servers.
 
 ```json

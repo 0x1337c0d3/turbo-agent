@@ -1,6 +1,6 @@
-# Use TurboFieldfareAgent in Zed or another ACP client
+# Use TurboAgent in Zed or another ACP client
 
-`TurboFieldfareAgent --acp` serves Agent Client Protocol v1 over stdin/stdout.
+`TurboAgent --acp` serves Agent Client Protocol v1 over stdin/stdout.
 The terminal REPL remains the default when `--acp` is omitted. The ACP frontend
 and REPL share the model runtime, conversation/tool loop, tools and skill loader.
 For Ctrl-O expansion and transcript navigation in the REPL, see
@@ -11,7 +11,7 @@ For Ctrl-O expansion and transcript navigation in the REPL, see
 Build the agent:
 
 ```bash
-swift build -c release --product TurboFieldfareAgent
+swift build -c release --product TurboAgent
 ```
 
 Add a custom agent to Zed's settings, replacing the executable path with the
@@ -20,9 +20,9 @@ absolute path to your checkout's built binary:
 ```json
 {
   "agent_servers": {
-    "TurboFieldfare": {
+    "Turbo": {
       "type": "custom",
-      "command": "/absolute/path/to/turbo-agent/.build/release/TurboFieldfareAgent",
+      "command": "/absolute/path/to/turbo-agent/.build/release/TurboAgent",
       "args": ["--acp"],
       "env": {}
     }
@@ -30,13 +30,13 @@ absolute path to your checkout's built binary:
 }
 ```
 
-Select **TurboFieldfare** when starting a thread in Zed's Agent Panel. Zed's
+Select **Turbo** when starting a thread in Zed's Agent Panel. Zed's
 `dev: open acp logs` command shows protocol traffic for troubleshooting.
 See [Zed's custom agent documentation](https://zed.dev/docs/ai/external-agents#custom-agents).
 
 The existing defaults apply:
 
-- Model: `~/Library/Application Support/TurboFieldfare/gemma4.gturbo`.
+- Model: `~/Library/Application Support/Turbo/gemma4.gturbo`.
 - Context capacity: 262144 tokens.
 - Override with `"args": ["--acp", "--model", "/absolute/path/model.gturbo", "--max-context", "262144"]`.
 - There is no agent account/login requirement. The model must already be installed.
@@ -66,7 +66,7 @@ creation, and `/skills` do not load it.
   Relative file paths and shell commands resolve against the session's project.
 - Skill names published as ACP available commands. `/name request` loads the
   selected skill on demand; `/skills` lists them.
-- Native MCP settings from `~/.config/TurboFieldfareAgent/settings.json`, merged
+- Native MCP settings from `~/.config/TurboAgent/settings.json`, merged
   with the client's `mcpServers`. Client entries take precedence by server name.
   Stdio and Streamable HTTP are supported; legacy SSE transport is rejected.
   The UI-launched agent must inherit environment variables referenced by native
@@ -112,7 +112,7 @@ requests independently of an active prompt. `ACPTransport` handles stdio framing
 Run model-free checks with:
 
 ```bash
-Scripts/test.sh --filter TurboFieldfareAgentTests
+Scripts/test.sh --filter TurboAgentTests
 python3 Scripts/test-agent-editor.py
 ```
 
@@ -136,8 +136,8 @@ Pro, 32 GiB RAM. macOS 26.6.2; Apple Swift 6.4
 
 | Command | Exit | Complete summary/footer |
 | --- | --- | --- |
-| `swift build -c release --product TurboFieldfareAgent` | 0 | `Build complete! (56.55 sec.)` |
-| `Scripts/test.sh --filter TurboFieldfareAgentTests` | 0 | `Build complete! (3.42 sec.)`; `Executed 45 tests, with 0 failures (0 unexpected) in 5.226 (5.234) seconds` |
+| `swift build -c release --product TurboAgent` | 0 | `Build complete! (56.55 sec.)` |
+| `Scripts/test.sh --filter TurboAgentTests` | 0 | `Build complete! (3.42 sec.)`; `Executed 45 tests, with 0 failures (0 unexpected) in 5.226 (5.234) seconds` |
 | `python3 Scripts/test-agent-editor.py` | 0 | `31 terminal editor checks passed.` |
 | `git diff --check` | 0 | No output. |
 
@@ -165,9 +165,9 @@ for this work.
 In the terminal REPL, attach text files directly with `@path`:
 
 ```text
-Explain @Sources/TurboFieldfareAgent/Core/Session.swift
+Explain @Sources/TurboAgent/Core/Session.swift
 Compare @README.md @"docs/my notes.md"
-/review Review @Sources/TurboFieldfareAgent/Core/AgentCore.swift
+/review Review @Sources/TurboAgent/Core/AgentCore.swift
 ```
 
 Relative paths use the process working directory. Absolute paths and `~/` paths
