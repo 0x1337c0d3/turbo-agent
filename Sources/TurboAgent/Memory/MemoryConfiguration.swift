@@ -8,8 +8,13 @@ import Foundation
 /// how much it is allowed to hold.
 public struct ContinuityStorageConfiguration: Sendable, Equatable {
     /// Directory holding the journals. Created with owner-only permissions.
-    /// The start scripts pass `<TinyTitan>/memory`, beside `models/`; the binary
-    /// alone falls back to `~/.tinytitan/memory`.
+    ///
+    /// Resolved from the launch directory: memory lives beside the project
+    /// under `.turbo/memory`, so a project's continuity is as portable as
+    /// its checkout and `git rm -r .turbo` is a complete uninstall for that
+    /// project. `TINYTITAN_MEMORY_DIR` overrides it; when neither applies --
+    /// an embedded caller that never resolved a launch directory -- the
+    /// fallback is `~/.turbo/memory`.
     public var directory: URL
     /// A project file untouched for this many days has its session log
     /// expired -- the transcript, which is the bulk of it -- and keeps its
@@ -42,21 +47,50 @@ public struct ContinuityStorageConfiguration: Sendable, Equatable {
     /// facts refuse and the journal evicts, as before.
     public var maximumMemoryBytes: Int?
 
-    public init(directory: URL = ContinuityStorageConfiguration.defaultDirectory,
+    public init(directory: URL? = nil,
                 synchronizesEveryWrite: Bool = false,
                 maximumMemoryBytes: Int? = nil,
                 retentionDays: Int = 30,
                 maximumWorkspaces: Int = 100) {
-        self.directory = directory
+        // Nil resolves against the environment: the launch directory when the
+        // process was started from a project, home otherwise. A caller that
+        // already knows the directory passes it explicitly.
+        self.directory = directory ?? ContinuityStorageConfiguration.resolvedDirectory()
         self.synchronizesEveryWrite = synchronizesEveryWrite
         self.maximumMemoryBytes = maximumMemoryBytes
         self.retentionDays = max(0, retentionDays)
         self.maximumWorkspaces = max(0, maximumWorkspaces)
     }
 
+    /// Memory beside the project: `<launch directory>/.turbo/memory`. A home
+    /// (or its parent, or `/`) is not a project -- that launch has no
+    /// project to sit beside, so it falls back to `~/.turbo/memory`, which
+    /// `fromEnvironment` then refuses to serve memory from; see
+    /// `junkDrawerReason`.
+    public static func resolvedDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        currentDirectory: String = FileManager.default.currentDirectoryPath
+    ) -> URL {
+        let home = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let homePath = URL(fileURLWithPath: home).standardizedFileURL.path
+        let launch = URL(fileURLWithPath: currentDirectory).standardizedFileURL.path
+        let isJunkDrawer = [homePath,
+                            URL(fileURLWithPath: homePath).deletingLastPathComponent().path,
+                            "/"].contains(launch)
+        let base = isJunkDrawer
+            ? URL(fileURLWithPath: homePath, isDirectory: true)
+            : URL(fileURLWithPath: launch, isDirectory: true)
+        return base.appendingPathComponent(".turbo", isDirectory: true)
+            .appendingPathComponent("memory", isDirectory: true)
+    }
+
+    /// The bare fallback used when no environment applies. Home-based: an
+    /// embedded caller that never resolved a launch directory has no project
+    /// to sit beside.
     public static var defaultDirectory: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".tinytitan", isDirectory: true)
+        URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path,
+            isDirectory: true)
+            .appendingPathComponent(".turbo", isDirectory: true)
             .appendingPathComponent("memory", isDirectory: true)
     }
 
@@ -88,6 +122,9 @@ public struct ContinuityStorageConfiguration: Sendable, Equatable {
 
 /// The memory subsystem's whole configuration surface.
 public struct MemoryConfiguration: Sendable, Equatable {
+    /// Continuity memory is the point of this project, so it is on by default.
+    /// `TINYTITAN_MEMORY=0` (or `off`, `false`, `no`) is the way to run without
+    /// it; the explicit opt-ins keep working.
     public var isEnabled: Bool
     /// Why memory was asked for and not enabled, when that happened. Nil
     /// otherwise. The factory logs it, so a refusal is visible at start
@@ -110,11 +147,16 @@ public struct MemoryConfiguration: Sendable, Equatable {
     public var maximumIndexScan: Int
     /// How much of the memory API the model is shown.
     ///
-    /// Off by default. The tool loop is where the request-lifecycle risk and
-    /// the dependence on the model's tool discipline concentrate, and whether
-    /// a 3B-active model uses six memory tools well is a measurement rather
-    /// than a claim. Bootstrap injection and the session journal carry the
-    /// feature's value without it.
+    /// On with the minimal surface by default: write, get and list. The
+    /// bootstrap alone made a session a reader of memory; without a way to
+    /// write, every fact after the first was lost with the process, and the
+    /// continuity promise holds only if what a session learns survives it.
+    /// `minimal` rather than `full` because search and delete are where the
+    /// tool-discipline cost concentrates, and the list tool exists precisely
+    /// so the model never guesses keys -- the measured failure mode (136
+    /// reads to 2 writes when the bootstrap was empty) came from key
+    /// guessing, not from missing search. `TINYTITAN_MEMORY_TOOLS=full|off`
+    /// changes it.
     public var toolSurface: MemoryToolSurface
     /// Rounds of memory tool calls the engine will service inside one
     /// request before it stops and answers.
@@ -166,8 +208,8 @@ public struct MemoryConfiguration: Sendable, Equatable {
     /// noise. It fired exactly once in that run, holding the bible's rule
     /// about what Marcus may not learn before chapter 60.
     ///
-    /// `TINYTITAN_MEMORY_GUARD=0` turns it off. It only applies where memory is
-    /// already on, which is itself opt-in.
+    /// `TINYTITAN_MEMORY_GUARD=0` turns it off. It only applies where memory
+    /// is on.
     public var guardsUserFacts: Bool
 
     /// Serve memory from process-local storage when the journal cannot be written,
@@ -175,15 +217,15 @@ public struct MemoryConfiguration: Sendable, Equatable {
     /// and the model is told which one it is talking to.
     public var degradesToLocalStore: Bool
 
-    public init(isEnabled: Bool = false,
+    public init(isEnabled: Bool = true,
                 storage: ContinuityStorageConfiguration = .init(),
-                namespace: String = "tinytitan",
+                namespace: String = "agent",
                 user: String = MemoryConfiguration.defaultUser,
                 workspace: String = "default",
                 allowsPerRequestWorkspace: Bool = true,
                 limits: MemoryLimits = .init(),
                 maximumIndexScan: Int = 2_000,
-                toolSurface: MemoryToolSurface = .off,
+                toolSurface: MemoryToolSurface = .minimal,
                 maximumToolRounds: Int = 4,
                 journalEnabled: Bool = true,
                 journalLimits: JournalLimits = .init(),
@@ -222,19 +264,33 @@ public struct MemoryConfiguration: Sendable, Equatable {
     /// Reads the configuration from the environment, which is how the start
     /// scripts and the launchers pass it.
     ///
-    /// Every value has a default that works on a developer machine with a
-    /// machine, and the subsystem stays off unless TINYTITAN_MEMORY is set,
-    /// so nothing about serving changes for someone who has not asked for it.
+    /// Every value has a default that works on a developer machine, and the
+    /// subsystem is on by default -- it is the feature, not a side room. The
+    /// explicit opt-ins keep working, and `TINYTITAN_MEMORY=0` turns it off
+    /// for someone who genuinely wants none of it.
     public static func fromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> MemoryConfiguration {
-        var configuration = MemoryConfiguration()
+        var configuration = MemoryConfiguration(
+            storage: ContinuityStorageConfiguration(
+                // Storage beside the project: the launch directory's
+                // `.turbo/memory`, resolved from the same environment this
+                // factory parses, with `TINYTITAN_MEMORY_DIR` as the explicit
+                // override. A junk-drawer launch resolves to the home
+                // fallback, which the scope rules then refuse to serve
+                // memory from.
+                directory: environment["TINYTITAN_MEMORY_DIR"].flatMap {
+                    $0.isEmpty ? nil : URL(fileURLWithPath: $0)
+                } ?? ContinuityStorageConfiguration.resolvedDirectory(
+                    environment: environment,
+                    currentDirectory: environment["TINYTITAN_WORKSPACE_DIR"]
+                        ?? FileManager.default.currentDirectoryPath)))
         let flag = environment["TINYTITAN_MEMORY"]?.lowercased()
-        configuration.isEnabled = flag == "1" || flag == "on" || flag == "true"
-
-        if let directory = environment["TINYTITAN_MEMORY_DIR"], !directory.isEmpty {
-            configuration.storage.directory = URL(fileURLWithPath: directory)
+        if let flag {
+            configuration.isEnabled = !(flag == "0" || flag == "off" || flag == "false"
+                || flag == "no")
         }
+
         if let value = environment["TINYTITAN_MEMORY_FSYNC"] {
             configuration.storage.synchronizesEveryWrite = value == "1"
         }
@@ -253,19 +309,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         if let workspace = environment["TINYTITAN_MEMORY_WORKSPACE"] {
             configuration.workspace = workspace
         } else if let directory = environment["TINYTITAN_WORKSPACE_DIR"] {
-            // Only a refusal when memory was actually asked for. Off is off,
-            // and a reason that begins "TINYTITAN_MEMORY=1 but" must never be
-            // logged for someone who never set it.
-            if configuration.isEnabled,
-               let reason = junkDrawerReason(forPath: directory, environment: environment) {
-                // A server launched from the home directory and used for
-                // everything would put a novel and a codebase in one fact
-                // store. Refusing is the only outcome that is visible.
-                configuration.isEnabled = false
-                configuration.disabledReason = reason
-            } else {
-                configuration.workspace = workspaceIdentifier(forPath: directory)
-            }
+            configuration.resolveDirectoryOverride(directory, environment: environment)
         }
         if let value = environment["TINYTITAN_MEMORY_MAX_VALUE_BYTES"].flatMap(Int.init) {
             configuration.limits.maximumValueBytes = max(256, value)
@@ -334,11 +378,31 @@ public struct MemoryConfiguration: Sendable, Equatable {
             ("/", "the filesystem root"),
         ]
         for (refusedPath, label) in refused where candidate == refusedPath {
-            return "TINYTITAN_MEMORY=1 but the launch directory is \(label) (\(candidate)), "
-                + "which is not a project; memory stays off. Launch from the project "
-                + "directory, or set TINYTITAN_MEMORY_WORKSPACE=<name>."
+            return "the launch directory is \(label) (\(candidate)), "
+                + "which is not a project; memory stays off for this session. Launch from "
+                + "the project directory, or set TINYTITAN_MEMORY_WORKSPACE=<name>."
         }
         return nil
+    }
+
+    /// Resolves a directory that names the workspace: the launch scripts'
+    /// `TINYTITAN_WORKSPACE_DIR`, or a client-declared project root.
+    ///
+    /// A filesystem path cannot be a workspace id -- a `MemoryScope` refuses
+    /// the separators, so per-request directory overrides were silently
+    /// rejecting every session before this. The path resolves through the
+    /// same stable identifier as a launch directory, and the junk-drawer
+    /// refusal applies to it whether memory was asked for explicitly or is
+    /// simply on by default: a server launched from the home directory would
+    /// otherwise collect every project into one fact store.
+    mutating func resolveDirectoryOverride(_ path: String,
+                                           environment: [String: String]) {
+        if isEnabled, let reason = Self.junkDrawerReason(forPath: path, environment: environment) {
+            isEnabled = false
+            disabledReason = reason
+        } else {
+            workspace = Self.workspaceIdentifier(forPath: path)
+        }
     }
 
     /// A stable workspace id from a filesystem path: the directory name, plus
@@ -378,10 +442,38 @@ public struct MemoryConfiguration: Sendable, Equatable {
     /// unusable. A rejected scope disables memory rather than falling back to
     /// a shared one, because the failure mode of guessing is cross-project
     /// leakage.
+    ///
+    /// An override that names a filesystem path resolves to the path's
+    /// workspace id rather than failing validation, so a per-request project
+    /// root selects that project's memory instead of silently degrading to
+    /// the launch workspace. A directory that is not a project -- the home,
+    /// its parent, the root -- is refused outright: without this, a REPL
+    /// launched from the home directory and a client that declares it as the
+    /// project root would collect every project into one fact store, which
+    /// is exactly what the launch-time refusal exists to prevent.
     public func scope(workspaceOverride: String? = nil) -> MemoryScope? {
         let effective = allowsPerRequestWorkspace ? (workspaceOverride ?? workspace) : workspace
         guard effective != Self.sharedWorkspace else { return nil }
+        if looksLikeDirectoryPath(effective) {
+            // The live environment is the honest source for where the home
+            // is; a stored snapshot would go stale the moment a config built
+            // in one process answered a request in another.
+            if Self.junkDrawerReason(forPath: effective,
+                                     environment: ProcessInfo.processInfo.environment) != nil {
+                return nil
+            }
+            return try? MemoryScope(namespace: namespace, user: user,
+                                    workspace: Self.workspaceIdentifier(forPath: effective))
+        }
         return try? MemoryScope(namespace: namespace, user: user, workspace: effective)
+    }
+
+    /// Whether a string is a filesystem path rather than a workspace name.
+    /// Scope validation already rejects the separators; this only decides
+    /// whether resolving them into an id is the right response.
+    private func looksLikeDirectoryPath(_ value: String) -> Bool {
+        value.hasPrefix("/") || value.hasPrefix("./") || value.hasPrefix("../")
+            || value.hasPrefix("~/")
     }
 
     /// One line for the log at startup.

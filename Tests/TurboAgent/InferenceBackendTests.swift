@@ -102,6 +102,10 @@ final class InferenceBackendTests: XCTestCase, @unchecked Sendable {
     let backendRequire = AppleFoundationModelBackend(pccPolicy: .require, systemPrompt: "test")
     XCTAssertFalse(backendRequire.capabilities.isOnDevice)
     XCTAssertTrue(backendRequire.capabilities.isPrivateCloudCompute)
+
+    // Verify memory threshold is 12 GB
+    XCTAssertEqual(AppleFoundationModelBackend.advancedModelMemoryThresholdBytes, 12 * 1024 * 1024 * 1024)
+    XCTAssertGreaterThan(AppleFoundationModelBackend.availableUnifiedMemoryBytes(), 0)
   }
 
   func testMCPJSONSchemaBridgeConversion() {

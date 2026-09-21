@@ -371,9 +371,17 @@ struct ToolRegistry {
       if let memoryService = context.memoryService,
         await memoryService.toolDefinitions().contains(where: { $0.name == call.name })
       {
-        let session = await memoryService.beginSession(
-          id: "agent_turn", workspaceOverride: context.directory.path, modelID: nil, tag: nil,
-          focus: nil)
+        // Reuse the turn's session when one is running, so a fact records
+        // the conversation that produced it. Fall back only when memory is
+        // enabled but the turn began without a session.
+        let session: MemorySessionContext?
+        if let running = context.memorySession {
+          session = running
+        } else {
+          session = await memoryService.beginSession(
+            id: "agent_turn", workspaceOverride: context.directory.path, modelID: nil, tag: nil,
+            focus: nil)
+        }
         guard let session = session else { return "Error: memory session rejected" }
         do {
           let data = call.argumentsJSON.data(using: .utf8)!
@@ -411,6 +419,8 @@ struct ToolRegistry {
         role: .user, content: call.stringArgument("prompt") ?? "", toolCalls: [], toolCallID: nil,
         name: nil),
     ]
+    var context = context
+    context.journalsTurn = false
     do {
       return try await AgentTurn.run(
         runtime: runtime, messages: &messages, context: context, resultLimit: 200)

@@ -10,13 +10,24 @@ final class AgentSession {
     self.runtime = runtime
     let memoryConfig = MemoryConfiguration.fromEnvironment(ProcessInfo.processInfo.environment)
     self.memoryService = MemoryService(configuration: memoryConfig, log: { _ in })
+    // A refusal is visible at start rather than discovered as facts from two
+    // projects in one bootstrap. Covers both the configured refusal and a
+    // session opened from a directory that is not a project.
+    let refusal = memoryConfig.disabledReason
+      ?? MemoryConfiguration.junkDrawerReason(
+        forPath: FileManager.default.currentDirectoryPath,
+        environment: ProcessInfo.processInfo.environment)
+    if let refusal {
+      printColor("\n[memory disabled: \(refusal)]\n", color: "yellow")
+    }
     self.messages = [
       AgentMessage(
         role: .system, content: runtime.config.systemPrompt, toolCalls: [], toolCallID: nil,
         name: nil)
     ]
     let service = self.memoryService
-    Task { [service] in await service.warmUp() }
+    let workingDirectory = FileManager.default.currentDirectoryPath
+    Task { [service] in await service.warmUp(workspaceOverride: workingDirectory) }
   }
 
   private func handleShellCommand(userInput: String) {

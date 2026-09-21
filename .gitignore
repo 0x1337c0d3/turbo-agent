@@ -49,4 +49,7 @@ tmp/
 __pycache__/
 *.pyc
 .venv/
+
+# Agent Memory
 .codex-nav/
+.turbo/

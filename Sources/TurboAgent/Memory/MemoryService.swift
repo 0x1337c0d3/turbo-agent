@@ -39,6 +39,12 @@ public actor MemoryService {
     /// Workspaces whose journal failure has been logged, so a disk that stays
     /// full produces one line rather than one per tool call.
     private var reportedJournalFailures: Set<MemoryScope> = []
+    /// The conversation's continuity session per scope, pinned on first use
+    /// so a session, its journal turns and its memory writes share one
+    /// identity for the life of the conversation.
+    private var conversationIDs: [MemoryScope: String] = [:]
+    /// Journal turn index per scope, reset when a conversation begins.
+    private var turnIndices: [MemoryScope: Int] = [:]
     private var log: @Sendable (MemoryLogEvent) -> Void
 
     /// Everything one scope needs, created on first use.
@@ -189,47 +195,59 @@ public actor MemoryService {
 
     /// Records a completed turn. Content is filtered to substance here, so no
     /// caller can accidentally journal a tool result or a file dump.
-    public func recordTurn(session: MemorySessionContext,
-                           index: Int,
+    ///
+    /// A new continuity session per conversation: `beginSession` runs at the
+    /// start of every user request, so a second one here would split one
+    /// conversation's transcript across two journal sessions. The session
+    /// identity is pinned on the service, keyed by scope, and reused for the
+    /// duration of the conversation.
+    public func recordTurn(session context: MemorySessionContext,
                            prompt: String,
-                           reply: String,
-                           model: String?,
-                           promptTokens: Int,
-                           completionTokens: Int,
-                           latencyMilliseconds: Int,
-                           stopReason: String?) async {
-        guard let journal = await workspace(for: session.scope)?.journal else { return }
+                           reply: String) async {
+        guard let journal = await workspace(for: context.scope)?.journal else { return }
+        let id = conversationIdentifier(in: context.scope, session: context.session.id)
+        let index = (turnIndices[context.scope, default: 0])
+        turnIndices[context.scope] = index + 1
         let filteredPrompt = journalFilter.filter(prompt)
         let filteredReply = journalFilter.filter(reply)
-        let turn = JournalTurn(session: session.session.id,
-                               workspace: session.scope.workspace,
+        let turn = JournalTurn(session: id,
+                               workspace: context.scope.workspace,
                                index: index,
                                prompt: filteredPrompt.kept,
                                reply: filteredReply.kept,
-                               model: model,
-                               promptTokens: promptTokens,
-                               completionTokens: completionTokens,
-                               latencyMilliseconds: latencyMilliseconds,
-                               stopReason: stopReason,
                                droppedBytes: filteredPrompt.dropped + filteredReply.dropped)
-        await journal.record(turn, in: session.scope)
+        await journal.record(turn, in: context.scope)
         // Never fails the turn: the reply has already been given. A journal
         // that refused it stops the workspace reporting itself durable.
-        _ = await journalFailed(in: session.scope)
-        log(.journaled(session: session.session.id, index: index, bytes: turn.byteCount))
-        await enforceResidencyBudget(keeping: session.scope)
+        _ = await journalFailed(in: context.scope)
+        log(.journaled(session: id, index: index, bytes: turn.byteCount))
+        await enforceResidencyBudget(keeping: context.scope)
     }
 
-    /// Open the configured workspace now, so its journal is replayed at boot
-    /// rather than on the first request.
+    /// The journal session name for a conversation: one per session context,
+    /// stable for the life of the conversation so its turns stay together.
+    private func conversationIdentifier(in scope: MemoryScope, session: String) -> String {
+        if let known = conversationIDs[scope] { return known }
+        let fresh = session
+        conversationIDs[scope] = fresh
+        return fresh
+    }
+
+    /// Open the workspace a caller is about to serve, so its journal is
+    /// replayed at boot rather than on the first request.
     ///
     /// Replay is the one bulk read the store ever does. Paying it at start,
     /// while nothing is being generated, keeps it off the same disk the
     /// expert streamer is about to saturate and off the first user's
     /// latency. Safe to call more than once and safe with memory disabled.
-    public func warmUp() async {
+    /// The override is the caller's project directory: without it, a server
+    /// that serves per-request workspaces would warm a placeholder workspace
+    /// no request can ever reach.
+    public func warmUp(workspaceOverride: String? = nil) async {
         await sweepStaleWorkspaces()
-        guard let scope = configuration.scope() else { return }
+        guard let scope = configuration.scope(workspaceOverride: workspaceOverride) else {
+            return
+        }
         _ = await workspace(for: scope)
     }
 
@@ -425,7 +443,15 @@ public actor MemoryService {
             log(.rejectedScope(workspaceOverride ?? configuration.workspace))
             return nil
         }
-        let session = MemorySession(id: id, modelID: modelID, tag: tag, focus: focus)
+        // One conversation = one continuity session per scope. `beginSession`
+        // runs on every user turn, so a fresh identity each time would split
+        // a conversation's transcript across journal sessions. The turn
+        // counter is only reset when the conversation is newly pinned, not
+        // on every turn or on a subagent's re-entry.
+        let isNewConversation = conversationIDs[scope] == nil
+        let conversationID = conversationIdentifier(in: scope, session: id)
+        if isNewConversation { turnIndices[scope] = 0 }
+        let session = MemorySession(id: conversationID, modelID: modelID, tag: tag, focus: focus)
         var bootstrap = MemoryBootstrap.empty
         if let workspace = await workspace(for: scope) {
             do {

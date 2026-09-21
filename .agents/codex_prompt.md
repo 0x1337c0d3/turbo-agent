@@ -81,6 +81,24 @@ long-running process with `&`; the command runner waits for completion. If a
 tool call is denied or cancelled, respect that decision and do not retry it
 without a new user request.
 
+## Code navigation
+
+For source-code exploration, prefer the codex-nav MCP tools over
+`grep_search`, `find_by_name`, or shell text search:
+
+1. Call `code_nav_init` once at the start of a code task, before exploring
+   source. Refresh normally; use `reset: true` only to repair a corrupt index
+   or after a large refactor.
+2. Use `code_symbols` to discover definitions in a file or directory.
+3. Use `code_query` for structural searches such as declarations, calls, and
+   references, then use `read_file` to inspect the narrowed result.
+
+Use `grep_search`, `find_by_name`, or shell search only for prose, configuration,
+logs, generated data, literal text, a language the advertised codex-nav schema
+does not support, or when codex-nav is unavailable or returns an error. Do not
+substitute text search merely because its query is more familiar. Briefly state
+the fallback reason when searching source without codex-nav.
+
 ## Code and Workspace Safety
 
 - Treat the worktree as shared and possibly dirty. Preserve changes you did not

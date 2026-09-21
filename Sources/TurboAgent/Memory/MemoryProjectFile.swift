@@ -121,17 +121,16 @@ public struct MemoryProjectFile: Sendable {
             modifiedAt: (attributes?[.modificationDate] as? Date) ?? .distantPast)
     }
 
-    /// Where the project files are, by the same rule the server uses:
-    /// `TINYTITAN_MEMORY_DIR`, else `memory/` under the current directory when it
-    /// exists, else the binary's own fallback.
+    /// Where the project files are, by the same rule the agent uses:
+    /// `TINYTITAN_MEMORY_DIR`, else `.turbo/memory` beside the project the
+    /// process is running from, else the home fallback.
     public static func defaultDirectory(environment: [String: String] = ProcessInfo.processInfo.environment,
                                         currentDirectory: String = FileManager.default.currentDirectoryPath)
         -> URL {
         if let explicit = environment["TINYTITAN_MEMORY_DIR"], !explicit.isEmpty {
             return URL(fileURLWithPath: explicit)
         }
-        let local = URL(fileURLWithPath: currentDirectory).appendingPathComponent("memory")
-        if FileManager.default.fileExists(atPath: local.path) { return local }
-        return ContinuityStorageConfiguration.defaultDirectory
+        return ContinuityStorageConfiguration.resolvedDirectory(
+            environment: environment, currentDirectory: currentDirectory)
     }
 }

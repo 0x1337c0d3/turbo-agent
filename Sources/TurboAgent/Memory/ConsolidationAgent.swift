@@ -39,7 +39,8 @@ enum ConsolidationAgent {
             mcp: nil,
             definitions: await ToolRegistry.memoryDefinitions(service: memoryService),
             interaction: nil,
-            memoryService: memoryService
+            memoryService: memoryService,
+            journalsTurn: false
         )
 
         // Use the shared conversation run loop

@@ -115,6 +115,14 @@ public struct MemoryScope: Hashable, Sendable, Codable {
         self.workspace = try Self.validate(workspace, "workspace")
     }
 
+    /// Whether all three components would be accepted, without throwing.
+    /// Used to decide whether a workspace override is already a valid name
+    /// or a filesystem path that has to be resolved into one.
+    public static func isValid(namespace: String, user: String, workspace: String) -> Bool {
+        (try? Self(
+            namespace: namespace, user: user, workspace: workspace)) != nil
+    }
+
     /// Scope components reach us from a launch flag, an environment variable
     /// and an HTTP header, so they are sanitized on the same terms as keys:
     /// no separators, no traversal, bounded length.

@@ -9,6 +9,14 @@ struct AgentToolContext: Sendable {
   let cancellation: AgentCancellation
   let terminal: TerminalGeneration?
   let memoryService: MemoryService?
+  /// The memory session this turn runs in, when one has begun. Set by
+  /// `AgentTurn.run`; memory tool calls reuse it so a fact records the
+  /// conversation that produced it instead of a shared placeholder.
+  var memorySession: MemorySessionContext?
+  /// Whether the completed exchange belongs in the conversation journal.
+  /// Subagents and consolidation runs borrow the parent's memory session
+  /// but their transcripts are machinery, not what was asked and answered.
+  var journalsTurn: Bool
 
   init(
     directory: URL,
@@ -18,7 +26,9 @@ struct AgentToolContext: Sendable {
     interaction: AgentInteraction? = nil,
     cancellation: AgentCancellation = AgentCancellation(),
     terminal: TerminalGeneration? = nil,
-    memoryService: MemoryService? = nil
+    memoryService: MemoryService? = nil,
+    memorySession: MemorySessionContext? = nil,
+    journalsTurn: Bool = true
   ) {
     self.directory = directory
     self.systemPrompt = systemPrompt
@@ -28,6 +38,8 @@ struct AgentToolContext: Sendable {
     self.cancellation = cancellation
     self.terminal = terminal
     self.memoryService = memoryService
+    self.memorySession = memorySession
+    self.journalsTurn = journalsTurn
   }
 
   static func terminal(
@@ -55,19 +67,23 @@ enum AgentTurn {
     runtime: AgentRuntime, messages: inout [AgentMessage],
     context: AgentToolContext, resultLimit: Int = 300, forceLocal: Bool = false
   ) async throws -> String {
-    let memoryBootstrap: String
-    if let memoryService = context.memoryService {
-      if let session = await memoryService.beginSession(
-        id: "agent_turn", workspaceOverride: context.directory.path, modelID: nil, tag: nil,
-        focus: nil)
-      {
-        let instructions = await memoryService.instructions(for: session)
-        memoryBootstrap = "\n\n" + instructions
-      } else {
-        memoryBootstrap = ""
-      }
-    } else {
-      memoryBootstrap = ""
+    // The prompt a session opens with, before the memory bootstrap is
+    // installed. It is what a later consolidation is shown: the memory
+    // fragment is machinery, not a thing worth distilling into a fact.
+    let userRequest = messages.last(where: { $0.role == .user })?.content ?? ""
+    var memoryBootstrap = ""
+    var context = context
+    // One continuity session per user request, keyed to the workspace the
+    // request runs in, so the journal reads as one conversation and every
+    // write is attributed to it.
+    if let memoryService = context.memoryService,
+      let session = await memoryService.beginSession(
+        id: UUID().uuidString, workspaceOverride: context.directory.path,
+        modelID: runtime.currentTarget.rawValue, tag: nil, focus: userRequest)
+    {
+      context.memorySession = session
+      let instructions = await memoryService.instructions(for: session)
+      memoryBootstrap = "\n\n" + instructions
     }
 
     ToolRegistry.resetTurnState()
@@ -121,6 +137,17 @@ enum AgentTurn {
         try context.cancellation.check()
         return result
       })
+
+    // The turn is the record, not a side effect of it: prompt, reply and
+    // what the session changed. Never on the reply path -- the reply is
+    // already owed -- and a journal failure degrades rather than throws.
+    // A subagent's or consolidation's exchange is machinery, not a
+    // conversation turn, so it is not journaled.
+    if context.journalsTurn,
+      let memoryService = context.memoryService, let session = context.memorySession {
+      await memoryService.recordTurn(
+        session: session, prompt: userRequest, reply: result)
+    }
     return result
   }
 }
@@ -152,6 +179,12 @@ actor AgentCore: ACPBackend {
 
   init(arguments: [String]) { self.arguments = arguments }
 
+  /// One diagnostics line to stderr. ACP JSON-RPC and the terminal UI own
+  /// stdout, so anything printed there is protocol corruption.
+  private static func writeNotice(_ text: String) {
+    FileHandle.standardError.write(Data("[memory] \(text)\n".utf8))
+  }
+
   func newSession(id: String, directory: URL, servers: [String: AgentMCPConfig.ServerConfig]) throws
     -> [String]
   {
@@ -165,7 +198,19 @@ actor AgentCore: ACPBackend {
     configured.merge(servers) { _, supplied in supplied }
     let memoryConfig = MemoryConfiguration.fromEnvironment(ProcessInfo.processInfo.environment)
     let memoryService = MemoryService(configuration: memoryConfig, log: { _ in })
-    Task { await memoryService.warmUp() }
+    // A refusal is visible at start rather than discovered as facts from two
+    // projects in one bootstrap.
+    // A refusal is visible at start rather than discovered as facts from two
+    // projects in one bootstrap. Covers both the configured refusal and a
+    // session opened from a directory that is not a project. Stderr, never
+    // stdout: ACP frames and the terminal transcript share stdout.
+    let refusal = memoryConfig.disabledReason
+      ?? MemoryConfiguration.junkDrawerReason(
+        forPath: directory.path, environment: ProcessInfo.processInfo.environment)
+    if let refusal {
+      Self.writeNotice("memory disabled: \(refusal)")
+    }
+    Task { await memoryService.warmUp(workspaceOverride: directory.path) }
     sessions[id] = Session(
       config: config, directory: directory, skills: skills, serverConfigs: configured,
       memoryService: memoryService,

@@ -26,6 +26,39 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
   private let toolBridge: MCPJSONSchemaBridge
   private let statusLine: AgentStatusLine
 
+  /// Minimum unified memory required to default to `SystemLanguageModel.Variant.coreAdvanced3` (12 GB).
+  static let advancedModelMemoryThresholdBytes: UInt64 = 12 * 1024 * 1024 * 1024
+
+  /// Returns the available unified memory in bytes.
+  /// Checks dynamic available memory (free + inactive pages) via `host_statistics64`,
+  /// falling back to total physical memory (`ProcessInfo.processInfo.physicalMemory`).
+  static func availableUnifiedMemoryBytes() -> UInt64 {
+    var hostSize = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+    var vmStats = vm_statistics64()
+    let kernRet = withUnsafeMutablePointer(to: &vmStats) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(hostSize)) {
+        host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &hostSize)
+      }
+    }
+    if kernRet == KERN_SUCCESS {
+      var pageSize: vm_size_t = 0
+      host_page_size(mach_host_self(), &pageSize)
+      let free = UInt64(vmStats.free_count) * UInt64(pageSize)
+      let inactive = UInt64(vmStats.inactive_count) * UInt64(pageSize)
+      let available = free + inactive
+      if available > 0 {
+        return available
+      }
+    }
+    return ProcessInfo.processInfo.physicalMemory
+  }
+
+  /// Determines whether the system has 12+ GB of unified memory available.
+  static func hasTwelveOrMoreGigabytesUnifiedMemoryAvailable() -> Bool {
+    return availableUnifiedMemoryBytes() >= advancedModelMemoryThresholdBytes
+      || ProcessInfo.processInfo.physicalMemory >= advancedModelMemoryThresholdBytes
+  }
+
   init(pccPolicy: PCCPolicy = .auto, systemPrompt: String, statusLine: AgentStatusLine? = nil) {
     self.pccPolicy = pccPolicy
     self.systemPrompt = systemPrompt
@@ -81,6 +114,29 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
   }
 
   #if canImport(FoundationModels)
+    /// Selects the on-device SystemLanguageModel. If the device has 12+ GB of unified memory
+    /// available and SystemLanguageModel.Variant.coreAdvanced3 is available, returns it;
+    /// otherwise returns Core3 or the default SystemLanguageModel.
+    @available(macOS 27.0, *)
+    private func selectOnDeviceModel() -> SystemLanguageModel? {
+      let defaultModel = SystemLanguageModel.default
+      guard defaultModel.availability == .available else {
+        return nil
+      }
+
+      if Self.hasTwelveOrMoreGigabytesUnifiedMemoryAvailable() {
+        if defaultModel.variant == .coreAdvanced3 {
+          return defaultModel
+        }
+      } else {
+        if defaultModel.variant == .core3 {
+          return defaultModel
+        }
+      }
+
+      return defaultModel
+    }
+
     @available(macOS 27.0, *)
     private func generateWithFoundationModels(
       messages: [AgentMessage],
@@ -95,26 +151,26 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
 
       switch pccPolicy {
       case .disable:
-        guard SystemLanguageModel.default.availability == .available else {
+        guard let onDeviceModel = selectOnDeviceModel() else {
           throw AppleFoundationModelError.modelUnavailable(
-            "AFM 3 Core (SystemLanguageModel) is not available on this device."
+            "AFM 3 on-device (SystemLanguageModel) is not available on this device."
           )
         }
-        model = SystemLanguageModel.default
-        modelContextSize = SystemLanguageModel.default.contextSize
+        model = onDeviceModel
+        modelContextSize = onDeviceModel.contextSize
         usingPCC = false
 
       case .auto:
-        // Prefer on-device Core; fall through to Private Cloud Compute if unavailable.
-        if SystemLanguageModel.default.availability == .available {
-          model = SystemLanguageModel.default
-          modelContextSize = SystemLanguageModel.default.contextSize
+        // Prefer on-device model; fall through to Private Cloud Compute if unavailable.
+        if let onDeviceModel = selectOnDeviceModel() {
+          model = onDeviceModel
+          modelContextSize = onDeviceModel.contextSize
           usingPCC = false
         } else {
           let pcc = PrivateCloudComputeLanguageModel()
           guard pcc.availability == .available else {
             throw AppleFoundationModelError.modelUnavailable(
-              "Neither AFM 3 Core nor Private Cloud Compute is available on this device."
+              "Neither AFM 3 on-device nor Private Cloud Compute is available on this device."
             )
           }
           model = pcc
@@ -137,6 +193,12 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
       // Update capabilities with the real context window and routing, syncing the status bar.
       let expectedOnDevice = !usingPCC
       let expectedPCC = usingPCC
+      let onDeviceModelName: String
+      if let slm = model as? SystemLanguageModel {
+        onDeviceModelName = "Apple Foundation Models (\(slm.variant.displayName))"
+      } else {
+        onDeviceModelName = "Apple Foundation Models (AFM 3 Core)"
+      }
       if capabilities.maxContextLength != modelContextSize
         || capabilities.isOnDevice != expectedOnDevice
         || capabilities.isPrivateCloudCompute != expectedPCC
@@ -144,7 +206,7 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
         capabilities = BackendCapabilities(
           name: usingPCC
             ? "Apple Foundation Models (AFM Cloud Pro PCC)"
-            : "Apple Foundation Models (AFM 3 Core)",
+            : onDeviceModelName,
           supportsTools: capabilities.supportsTools,
           supportsStreaming: capabilities.supportsStreaming,
           maxContextLength: modelContextSize,
