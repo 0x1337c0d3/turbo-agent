@@ -81,6 +81,7 @@ and the tracked-symlink and Markdown-link checks.
 
 ## Documentation
 
+- [Small context windows](docs/SMALL_CONTEXT_WINDOWS.md)
 - [Terminal interface](docs/AGENT_TERMINAL.md)
 - [MCP configuration](docs/AGENT_MCP.md)
 - [ACP and Zed setup](docs/AGENT_ACP.md)
