@@ -57,6 +57,8 @@ creation, and `/skills` do not load it.
 - UI permission requests before file, shell, URL and MCP tools. Only the explicit
   **Allow once** response authorizes an operation. Missing, rejected, failed or
   cancelled permission responses deny it. Delegated tasks inherit these checks.
+  File-edit permission requests carry the bounded diff preview; edit anchors
+  and whole-file replacement are revision guarded exactly as in the terminal.
 - Client file reads/writes when advertised, allowing tools to use unsaved editor
   buffers. Otherwise, approved file tools operate on the local filesystem.
 - `session/cancel` during generation, approvals, shell commands and MCP requests.

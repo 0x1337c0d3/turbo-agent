@@ -114,9 +114,11 @@ public struct MCPJSONSchemaBridge: Sendable {
       ```
       3. Stop immediately after emitting the `tool_call` block. Do NOT generate simulated outputs, fake execution results, or hallucinated contents.
       4. When creating or modifying files:
-         - Use `write_file` to save files to disk.
+         - Use `write_file` to save new files to disk. Replacing an existing file also requires `expected_digest` from a complete read of the current revision.
+         - Prefer `edit_file` for bounded changes: pass `target` copied exactly from a recent `read_file`, set `expected_digest` to that read's digest, and keep the target unique (or pass `replace_all` deliberately).
+         - Use `apply_patch` for multiple non-adjacent changes in a single file: pass `expected_digest` from a recent `read_file` and an array of non-overlapping `hunks` (`target` and `replacement`).
          - Source files must contain valid code only—never include markdown explanations or fences inside the saved code file.
-         - Simply writing code in your assistant message DOES NOT save it to disk. You MUST call `write_file` to persist changes.
+         - Simply writing code in your assistant message DOES NOT save it to disk. You MUST call `write_file`, `edit_file`, or `apply_patch` to persist changes.
       5. When executing shell commands with `execute_bash`, provide `arguments` with `"command"` (e.g. `{"name": "execute_bash", "arguments": {"command": "swift test"}}`).
       6. When all tasks are completed and verified, provide your final response without `tool_call` blocks.
       """)

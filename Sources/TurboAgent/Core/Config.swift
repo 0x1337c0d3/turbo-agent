@@ -2,11 +2,13 @@ import Foundation
 
 public enum AgentBackendKind: String, Sendable, CaseIterable { case apple, openai }
 public enum PCCPolicy: String, Sendable, CaseIterable { case auto, disable, require }
+public enum OrchestrationMode: String, Sendable, CaseIterable { case auto, always, never }
 
 public enum AgentConfigError: Error, CustomStringConvertible, Equatable {
   case invalidBackend(String)
   case invalidPCCPolicy(String)
   case invalidMaxRounds(String)
+  case invalidOrchestrationMode(String)
   case missingValue(String)
   case unsupportedOption(String)
 
@@ -17,6 +19,8 @@ public enum AgentConfigError: Error, CustomStringConvertible, Equatable {
     case .invalidPCCPolicy(let value):
       return "Invalid PCC policy: '\(value)'. Supported policies are: auto, disable, require."
     case .invalidMaxRounds(let value): return "Invalid --max-rounds value: '\(value)'."
+    case .invalidOrchestrationMode(let value):
+      return "Invalid orchestration mode: '\(value)'. Supported modes are: auto, always, never."
     case .missingValue(let option): return "Missing value for \(option)."
     case .unsupportedOption(let option): return "Unsupported option: \(option)."
     }
@@ -30,6 +34,7 @@ public struct AgentConfig: Sendable {
   public let maxRounds: Int
   public let explicitMaxRounds: Int?
   public let yolo: Bool
+  public let orchestrationMode: OrchestrationMode
 
   public init(
     arguments: [String] = Array(CommandLine.arguments.dropFirst()),
@@ -41,6 +46,7 @@ public struct AgentConfig: Sendable {
     var maxRounds: Int?
     var agentsFilePath: String?
     var systemPromptPath: String?
+    var selectedOrchestration = OrchestrationMode.auto
     var yolo = false
     var index = 0
 
@@ -73,6 +79,13 @@ public struct AgentConfig: Sendable {
         }
         maxRounds = parsed
         index += 2
+      case "--orchestration":
+        let raw = try value(after: option)
+        guard let mode = OrchestrationMode(rawValue: raw.lowercased()) else {
+          throw AgentConfigError.invalidOrchestrationMode(raw)
+        }
+        selectedOrchestration = mode
+        index += 2
       case "--agents-file":
         agentsFilePath = try value(after: option)
         index += 2
@@ -98,14 +111,18 @@ public struct AgentConfig: Sendable {
     self.maxRounds = maxRounds ?? 32
     explicitMaxRounds = maxRounds
     self.yolo = yolo
+    self.orchestrationMode = selectedOrchestration
+    let isEightK = (backend == .apple && pccPolicy != .require)
     systemPrompt = Self.buildSystemPrompt(
       homeDirectory: homeDirectory, workingDirectory: workingDirectory,
-      agentsFilePath: agentsFilePath, systemPromptPath: systemPromptPath)
+      agentsFilePath: agentsFilePath, systemPromptPath: systemPromptPath,
+      isEightK: isEightK)
   }
 
   private static func buildSystemPrompt(
     homeDirectory: URL, workingDirectory: URL,
-    agentsFilePath: String?, systemPromptPath: String?
+    agentsFilePath: String?, systemPromptPath: String?,
+    isEightK: Bool = false
   ) -> String {
     var prompt = ""
     func append(_ url: URL, header: String? = nil) {
@@ -117,8 +134,16 @@ public struct AgentConfig: Sendable {
     if let systemPromptPath {
       append(URL(fileURLWithPath: systemPromptPath))
     } else {
-      append(homeDirectory.appendingPathComponent(".agents/codex_prompt.md"))
-      append(workingDirectory.appendingPathComponent(".agents/codex_prompt.md"))
+      let home8k = homeDirectory.appendingPathComponent(".agents/codex_prompt_8k.md")
+      let work8k = workingDirectory.appendingPathComponent(".agents/codex_prompt_8k.md")
+      let has8k = FileManager.default.fileExists(atPath: home8k.path) || FileManager.default.fileExists(atPath: work8k.path)
+      if isEightK && has8k {
+        append(home8k)
+        append(work8k)
+      } else {
+        append(homeDirectory.appendingPathComponent(".agents/codex_prompt.md"))
+        append(workingDirectory.appendingPathComponent(".agents/codex_prompt.md"))
+      }
     }
     if let agentsFilePath {
       append(URL(fileURLWithPath: agentsFilePath), header: "## Agent Guidelines")

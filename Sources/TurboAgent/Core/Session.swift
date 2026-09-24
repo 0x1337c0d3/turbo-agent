@@ -145,9 +145,9 @@ final class AgentSession {
 
       Built-in tools
         Ask for these in your message; the agent chooses when to call them.
-        read_file            Read a file.
-        write_file           Write a file.
-        edit_file            Replace matching text in a file.
+        read_file            Read a file, or a labeled line range of it.
+        write_file           Create a file; replace one after a complete read.
+        edit_file            Replace exact text anchored on the read revision.
         execute_bash         Run a shell command.
         read_url             Fetch a URL and extract readable text.
         invoke_subagent      Delegate a task to a subagent.

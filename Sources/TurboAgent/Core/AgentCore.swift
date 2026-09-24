@@ -72,19 +72,20 @@ enum AgentTurn {
     // fragment is machinery, not a thing worth distilling into a fact.
     let userRequest = messages.last(where: { $0.role == .user })?.content ?? ""
     var memoryBootstrap = ""
-    var context = context
+    var runningContext = context
     // One continuity session per user request, keyed to the workspace the
     // request runs in, so the journal reads as one conversation and every
     // write is attributed to it.
-    if let memoryService = context.memoryService,
+    if let memoryService = runningContext.memoryService,
       let session = await memoryService.beginSession(
-        id: UUID().uuidString, workspaceOverride: context.directory.path,
+        id: UUID().uuidString, workspaceOverride: runningContext.directory.path,
         modelID: runtime.currentTarget.rawValue, tag: nil, focus: userRequest)
     {
-      context.memorySession = session
+      runningContext.memorySession = session
       let instructions = await memoryService.instructions(for: session)
       memoryBootstrap = "\n\n" + instructions
     }
+    let context = runningContext
 
     ToolRegistry.resetTurnState()
     runtime.resetToolBudget()
@@ -94,11 +95,94 @@ enum AgentTurn {
           role: .system, content: context.systemPrompt, toolCalls: [], toolCallID: nil, name: nil)
       }
     }
+    var retrievalBriefing: String?
+    var candidatePaths: [String] = []
+    if !userRequest.isEmpty {
+      let repoIndex = RepositoryIndex.forWorkspace(context.directory)
+      let retriever = RepositoryRetriever(index: repoIndex)
+      retrievalBriefing = retriever.briefing(for: userRequest)
+      let candidates = retriever.rank(query: userRequest)
+      candidatePaths = candidates.prefix(6).map(\.path)
+    }
+
+    let orchestrationEnabled = runtime.config.orchestrationMode != .never
+    let shouldOrchestrate = orchestrationEnabled && (
+      runtime.config.orchestrationMode == .always ||
+      EditPlanner.shouldOrchestrate(
+        request: userRequest, candidatePaths: candidatePaths, workspaceURL: context.directory)
+    )
+
+    if shouldOrchestrate {
+      do {
+        let graph = try await EditPlanner.plan(
+          request: userRequest,
+          candidatePaths: candidatePaths,
+          workspaceURL: context.directory,
+          generate: { plannerPrompt in
+            let msgs: [AgentMessage] = [
+              AgentMessage(role: .system, content: EditPlanner.plannerInstructions, toolCalls: [], toolCallID: nil, name: nil),
+              AgentMessage(role: .user, content: plannerPrompt, toolCalls: [], toolCallID: nil, name: nil),
+            ]
+            let (content, _) = try await runtime.generate(
+              messages: msgs, tools: [], interaction: context.interaction,
+              cancellation: context.cancellation, terminal: nil, forceLocal: forceLocal)
+            return content
+          }
+        )
+        let hasMutatingTasks = graph.tasks.contains(where: {
+          $0.kind == .edit || $0.kind == .create || $0.kind == .delete
+        })
+        guard hasMutatingTasks else {
+          throw TaskGraphValidationError.emptyTasks
+        }
+        let coordinator = PatchCoordinator()
+        let result = try await coordinator.execute(
+          graph: graph,
+          workspaceURL: context.directory,
+          runtime: runtime,
+          context: context,
+          generator: ModelTaskProposalGenerator(runtime: runtime, forceLocal: forceLocal)
+        )
+        if result.succeeded {
+          var telemetry = runtime.latestTelemetry ?? LargeFileEditingTelemetry()
+          telemetry.taskSucceeded = true
+          telemetry.retrievalCandidates = candidatePaths
+          telemetry.executorWaves = graph.waves.count
+          runtime.latestTelemetry = telemetry
+          if context.journalsTurn,
+            let memoryService = context.memoryService, let session = context.memorySession {
+            await memoryService.recordTurn(
+              session: session, prompt: userRequest, reply: result.summary)
+          }
+          if isatty(STDOUT_FILENO) == 1 && context.interaction == nil {
+            printColor("\n\(result.summary)\n", color: "green")
+          }
+          return result.summary
+        }
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        // Fall back to direct tool loop if planning or orchestration fails
+        var telemetry = runtime.latestTelemetry ?? LargeFileEditingTelemetry()
+        telemetry.invalidPlans += 1
+        runtime.latestTelemetry = telemetry
+      }
+    }
+
     let maxRounds = forceLocal ? runtime.config.maxRounds : runtime.effectiveMaxRounds
+    let contextLimit = forceLocal ? 8_192 : runtime.currentTarget.contextLimit(
+      fallback: (try? runtime.backend)?.capabilities.maxContextLength ?? 8_192)
     let result = try await ConversationTurn.run(
       messages: &messages,
       maximumRounds: maxRounds,
       cancellation: context.cancellation,
+      contextLimit: contextLimit,
+      projectMessages: true,
+      retrievalBriefing: retrievalBriefing,
+      candidatePaths: candidatePaths,
+      onWorkingStateUpdate: { [weak runtime] state in
+        runtime?.latestTelemetry = state.telemetry
+      },
       generate: { messages in
         var msgs = messages
         if msgs.count > 1, !memoryBootstrap.isEmpty {
@@ -137,6 +221,11 @@ enum AgentTurn {
         try context.cancellation.check()
         return result
       })
+
+    if var telemetry = runtime.latestTelemetry {
+      telemetry.taskSucceeded = true
+      runtime.latestTelemetry = telemetry
+    }
 
     // The turn is the record, not a side effect of it: prompt, reply and
     // what the session changed. Never on the reply path -- the reply is

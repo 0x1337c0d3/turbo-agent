@@ -30,6 +30,41 @@ separate view or clearing terminal scrollback. Existing terminal scrollback is
 historical and cannot be rewritten; use Page Up/Page Down at the agent prompt to
 browse the retained transcript with the current expansion setting.
 
+## Large-file reads and range reads
+
+`read_file` is revision-aware. A whole-file read that fits the tool-result
+ceiling returns in a labeled envelope with the file path, SHA-256 digest, and
+line count. A file that does not fit returns a deterministic outline of its
+declarations plus a small initial excerpt, with explicit instructions to
+request a range; the outline contains section names and line spans but no
+source bodies. Requesting `start_line`/`end_line` returns only that slice,
+labeled `complete="false"` with the actual range and the continuation line.
+Range reads work identically when an ACP client supplies file contents: the
+client read stays intact and slicing happens locally afterwards.
+
+## Anchored edits and whole-file replacement
+
+`edit_file` replaces one exact target string. The target must occur exactly
+once unless the model explicitly passes `replace_all`; an ambiguous target
+fails with guidance instead of silently editing several regions. Every edit
+must carry `expected_digest` from a `read_file` of the file. A missing digest
+fails as `revisionRequired`; a digest that does not match the file on disk
+fails as `staleRevision` and asks for a fresh read. A no-op replacement is
+reported without requesting a write. The approval view still shows a bounded
+unified diff, the runtime rechecks the source immediately before writing, and
+a successful edit returns the new revision digest so the next edit can anchor
+on it.
+
+`write_file` creates new files as before. Replacing an existing file
+additionally requires a matching `expected_digest` and evidence that this
+runtime read that exact revision completely: a range read, an outline, or a
+compacted receipt never authorizes whole-file replacement, including in
+`--yolo` mode. Rejected replacements explain the requirement and point at
+`edit_file` or a complete read. Creation targets that appear while their diff
+awaits approval are refused. Approval redacts `target`, `replacement`, and
+`content` bodies from the argument block; the diff preview itself carries the
+changes.
+
 ## Context budget footer
 
 Before every inference request, the agent conservatively estimates the complete

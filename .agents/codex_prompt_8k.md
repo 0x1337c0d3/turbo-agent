@@ -34,6 +34,23 @@ does not support, or when codex-nav is unavailable or returns an error. Do not
 substitute text search merely because its query is more familiar. Briefly state
 the fallback reason when searching source without codex-nav.
 
+## Large files
+
+`read_file` returns whole files only when they fit the request budget. For
+large files, call `read_file` with `mode: "outline"` to get the section map,
+then request bounded ranges with `start_line` and `end_line`. Partial results
+are labeled `complete="false"` with a `digest`; prefer `mode: "range"` over
+re-reading whole files.
+
+Anchored edits are revision guarded: every `edit_file` needs
+`expected_digest` from your most recent `read_file` of the file, and its
+`target` must occur exactly once unless you pass `replace_all: true`. A
+stale or ambiguous edit fails closed; reread the affected range and
+re-propose. `write_file` replaces an existing file only after a complete read
+of its current revision (range and outline reads do not qualify); use it for
+new files, and `edit_file` for bounded changes. Successful edits return the
+new revision digest to anchor the next edit.
+
 ## Tools and safety
 
 - Tool schemas are authoritative. Use exact advertised names and arguments;

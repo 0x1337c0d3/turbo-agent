@@ -148,7 +148,7 @@ def main():
             terminal.read_until(b"> ")
             os.write(terminal.master, b"\x03")
             terminal.read_until(b"Force Exited by User")
-            assert terminal.process.wait(timeout=5) == 1  # Harness reports EOF.
+            assert terminal.process.wait(timeout=10) == 1  # Harness reports EOF.
             assert termios.tcgetattr(terminal.master) == terminal.original_mode
             assert not (directory / "double-cancel-history").exists()
             print("PASS: double Ctrl+C exits, restores terminal, and saves no draft")

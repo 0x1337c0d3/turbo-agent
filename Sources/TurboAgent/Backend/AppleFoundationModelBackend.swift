@@ -321,6 +321,34 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
           }
           continue  // retry with trimmed history
 
+        } catch where isRecitationError(error) {
+          await activeTerminal?.finishGeneration()
+          
+          trimAttempt += 1
+          if trimAttempt > maxTrimAttempts {
+            let msg = "[AFM: Recitation filter blocked generation after \(maxTrimAttempts) attempts. Try asking the agent to use patches or summaries.]"
+            if interaction == nil {
+              printColor(msg + "\n", color: "yellow")
+            } else {
+              interaction?.text(msg + "\n")
+            }
+            throw AppleFoundationModelError.generationFailed("AFM recitation filter blocked generation.")
+          }
+          
+          let msg = "[AFM: Recitation detected. Retrying with instruction to summarize or use patches (\(trimAttempt)/\(maxTrimAttempts))...]"
+          if interaction == nil {
+            printColor(msg + "\n", color: "yellow")
+          } else {
+            interaction?.text(msg + "\n")
+          }
+          
+          currentMessages.append(AgentMessage(
+            role: .developer,
+            content: "[SAFETY FILTER: Recitation detected] Do not recite large portions of files verbatim. Output summaries or use unified diff patches.",
+            toolCalls: [], toolCallID: nil, name: nil
+          ))
+          continue
+
         } catch is CancellationError {
           await activeTerminal?.finishGeneration()
           throw CancellationError()
@@ -329,6 +357,11 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
           if interaction == nil {
             statusLine.snapshot.phase = "Error"
             statusLine.refresh(force: true)
+          }
+          let ns = error as NSError
+          if ns.domain == "com.apple.GenerativeFunctionsFoundation.GenerativeError" ||
+             (ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error])?.contains(where: { ($0 as NSError).code == 2010000 }) == true {
+             throw AppleFoundationModelError.generationFailed("Apple Cloud API Error 2010000: The model service may be rate limited or temporarily unavailable.")
           }
           throw error
         }
@@ -388,6 +421,15 @@ final class AppleFoundationModelBackend: InferenceBackend, @unchecked Sendable {
       let ns = error as NSError
       if let underlying = ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] {
         return underlying.contains { isContextSizeError($0) }
+      }
+      return false
+    }
+
+    private func isRecitationError(_ error: Error) -> Bool {
+      let ns = error as NSError
+      if ns.localizedDescription.localizedCaseInsensitiveContains("recitation") { return true }
+      if let underlying = ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] {
+        return underlying.contains { isRecitationError($0) }
       }
       return false
     }

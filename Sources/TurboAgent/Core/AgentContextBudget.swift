@@ -13,6 +13,36 @@ struct AgentContextBudget: Sendable, Equatable {
   let toolTokens: Int
   let messageTokens: Int
   let droppedMessageCount: Int
+  /// Number of tool results compacted to receipts by the projection layer.
+  let compactedObservationCount: Int
+  /// Number of complete tool exchange groups evicted by the projection layer.
+  let evictedGroupCount: Int
+  /// Estimated prompt tokens saved by compaction and eviction.
+  let estimatedTokensSaved: Int
+
+  init(
+    contextLimit: Int,
+    reservedOutputTokens: Int,
+    safetyMarginTokens: Int,
+    instructionTokens: Int,
+    toolTokens: Int,
+    messageTokens: Int,
+    droppedMessageCount: Int,
+    compactedObservationCount: Int = 0,
+    evictedGroupCount: Int = 0,
+    estimatedTokensSaved: Int = 0
+  ) {
+    self.contextLimit = contextLimit
+    self.reservedOutputTokens = reservedOutputTokens
+    self.safetyMarginTokens = safetyMarginTokens
+    self.instructionTokens = instructionTokens
+    self.toolTokens = toolTokens
+    self.messageTokens = messageTokens
+    self.droppedMessageCount = droppedMessageCount
+    self.compactedObservationCount = compactedObservationCount
+    self.evictedGroupCount = evictedGroupCount
+    self.estimatedTokensSaved = estimatedTokensSaved
+  }
 
   var promptTokens: Int { instructionTokens + toolTokens + messageTokens }
   var usablePromptTokens: Int {
@@ -53,7 +83,10 @@ enum AgentContextAssembler {
   /// System/developer messages and the newest user turn are never removed.
   static func prepare(
     messages: [AgentMessage], systemPrompt: String, tools: [AgentToolDefinition],
-    contextLimit: Int
+    contextLimit: Int,
+    compactedObservationCount: Int? = nil,
+    evictedGroupCount: Int? = nil,
+    estimatedTokensSaved: Int? = nil
   ) throws -> PreparedAgentContext {
     guard contextLimit > 0 else {
       throw AgentContextBudgetError.invalidContextLimit(contextLimit)
@@ -71,6 +104,11 @@ enum AgentContextAssembler {
 
     var selected = messages
     var dropped = 0
+    let compactedCount = compactedObservationCount ?? selected.filter {
+      $0.role == .tool && ($0.content?.hasPrefix("[receipt") == true)
+    }.count
+    let evictedCount = evictedGroupCount ?? 0
+    let savedTokens = estimatedTokensSaved ?? 0
     while true {
       let pinnedEnd = selected.prefix { $0.role == .system || $0.role == .developer }.count
       let messageTokens = selected.dropFirst(pinnedEnd).reduce(0) { $0 + estimateTokens($1) }
@@ -81,7 +119,10 @@ enum AgentContextAssembler {
         instructionTokens: instructionTokens,
         toolTokens: toolTokens,
         messageTokens: messageTokens,
-        droppedMessageCount: dropped)
+        droppedMessageCount: dropped,
+        compactedObservationCount: compactedCount,
+        evictedGroupCount: evictedCount,
+        estimatedTokensSaved: savedTokens)
       if budget.fits {
         return PreparedAgentContext(messages: selected, budget: budget)
       }
@@ -102,7 +143,9 @@ enum AgentContextAssembler {
 
   private static func estimateTokens(_ message: AgentMessage) -> Int {
     var total = 6
-    total += estimateTokens(message.content ?? "")
+    if message.role != .assistant || message.toolCalls.isEmpty {
+      total += estimateTokens(message.content ?? "")
+    }
     total += estimateTokens(message.toolCallID ?? "")
     total += estimateTokens(message.name ?? "")
     for call in message.toolCalls {

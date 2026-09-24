@@ -84,7 +84,7 @@ enum ACPInteraction {
     let kind: String
     switch call.name {
     case "read_file": kind = "read"
-    case "write_file", "edit_file": kind = "edit"
+    case "write_file", "edit_file", "apply_patch": kind = "edit"
     case "execute_bash": kind = "execute"
     case "read_url": kind = "fetch"
     default: kind = "other"
@@ -104,7 +104,7 @@ enum ACPInteraction {
       ])
     }
     if let path = call.stringArgument("path"),
-      ["read_file", "write_file", "edit_file"].contains(call.name)
+      ["read_file", "write_file", "edit_file", "apply_patch"].contains(call.name)
     {
       let path = URL(
         fileURLWithPath: (path as NSString).expandingTildeInPath, relativeTo: directory

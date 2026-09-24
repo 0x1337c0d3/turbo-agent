@@ -62,6 +62,7 @@ static unsigned char remember_history(EditLine *editor, int key) {
     return CC_NORM;
 }
 
+// Cancellation handler: initiates prompt cancellation sequence
 static unsigned char cancel_prompt(EditLine *editor, int key) {
     (void)key;
     // Finish at the bottom of a multiline draft before drawing the fresh prompt.
@@ -69,6 +70,7 @@ static unsigned char cancel_prompt(EditLine *editor, int key) {
     return CC_NORM;
 }
 
+// Cancellation handler: completes the cancellation process
 static unsigned char finish_cancel(EditLine *editor, int key) {
     (void)key;
     prompt_state(editor)->cancelled = 1;
@@ -275,6 +277,12 @@ static void configure_keys(EditLine *editor) {
     bind_key(editor, "^W", "ed-delete-prev-word");
     bind_key(editor, "^[[119;5u", "ed-delete-prev-word");
     bind_key(editor, "^[[27;5;119~", "ed-delete-prev-word");
+    bind_key(editor, "^[[119;2u", "ed-delete-prev-word");
+    bind_key(editor, "^[[27;2;119~", "ed-delete-prev-word");
+    bind_key(editor, "^[[119;9u", "ed-delete-prev-word");
+    bind_key(editor, "^[[27;9;119~", "ed-delete-prev-word");
+    bind_key(editor, "^[[3;2~", "ed-delete-prev-word");
+    bind_key(editor, "^[[3;5~", "ed-delete-prev-word");
     bind_key(editor, "^K", "ed-kill-line");
     bind_key(editor, "^[[107;5u", "ed-kill-line");
     bind_key(editor, "^[[27;5;107~", "ed-kill-line");

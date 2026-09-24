@@ -46,7 +46,13 @@ notation. When an action is needed, issue the native tool call.
   NEVER use `execute_bash` with `cat <<EOF`, `cat << 'EOF'`, `echo ... >`, or
   shell heredocs to write or edit code files. Shell heredocs frequently corrupt
   quotes, newlines, and string literals. Always use `write_file` to write code.
-- Use `edit_file` for precise string replacements in existing files.
+- Use `edit_file` for precise string replacements in existing files. Set
+  `expected_digest` to the digest from your most recent `read_file` of the
+  file; the target must occur exactly once unless `replace_all` is true. A
+  stale or ambiguous edit fails closed rather than applying.
+- Replacing an existing file with `write_file` also requires a matching
+  `expected_digest` plus a prior complete read of that revision; range or
+  outline reads do not qualify. Use `edit_file` for bounded changes.
 - Use `execute_bash` only for builds, tests, git, and commands without a dedicated
   tool. Do not use it as a substitute for `write_file` or `edit_file`.
 - Use `python_scratchpad` to test mathematical conjectures, state transitions, or
@@ -62,6 +68,9 @@ notation. When an action is needed, issue the native tool call.
   puzzles, or academic background not found in the local repository.
 - Use `read_url` to ingest documentation or pages returned by `web_search`.
 - Use `read_file` to inspect files and `list_dir` to inspect directories.
+  For large files, request `mode: "outline"` first, then bounded ranges with
+  `start_line`/`end_line`; whole-file reads of oversized files are refused,
+  and partial results are labeled with a digest and continuation line.
 - For source-code exploration, initialize the `codex_nav` MCP once, then use
   `code_symbols` and `code_query` for definitions, calls, and references.
   Fall back to `find_by_name` or `grep_search` only for prose, configuration,

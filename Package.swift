@@ -42,7 +42,10 @@ let package = Package(
     .testTarget(
       name: "TurboAgentTests",
       dependencies: ["TurboAgentCore"],
-      path: "Tests/TurboAgent"
+      path: "Tests/TurboAgent",
+      // The large-file fixture is UTF-8 test data, not compiled C: a Swift
+      // test target cannot contain mixed language sources.
+      exclude: ["Fixtures/LargeFileEditing/LargeEditorFixture.c"]
     ),
   ]
 )

@@ -24,6 +24,8 @@ struct AgentContextBudget {
     let promptTokens: Int
     let reservedOutputTokens: Int
     let droppedMessageCount: Int
+    let compactedObservationCount: Int
+    let evictedGroupCount: Int
 }
 final class AgentCancellation: @unchecked Sendable {
     private let lock = NSLock()

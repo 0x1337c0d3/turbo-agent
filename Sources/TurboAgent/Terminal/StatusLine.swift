@@ -170,6 +170,10 @@ struct AgentStatusSnapshot {
   var reservedOutputTokens = 0
   var droppedContextMessages = 0
   var modelLabel = ""
+  /// Number of tool results compacted to receipts in the latest projection.
+  var compactedObservations = 0
+  /// Number of complete exchange groups evicted in the latest projection.
+  var evictedGroups = 0
 
   func text(width: Int) -> String {
     let rate =
@@ -181,6 +185,8 @@ struct AgentStatusSnapshot {
     var context = "ctx \(contextTokens)/\(maxContext) (\(percent)%)"
     if reservedOutputTokens > 0 { context += " +\(reservedOutputTokens) out" }
     if droppedContextMessages > 0 { context += " | drop \(droppedContextMessages)" }
+    if compactedObservations > 0 { context += " | cmp \(compactedObservations)" }
+    if evictedGroups > 0 { context += " | evict \(evictedGroups)" }
     // Leave the last column unused to avoid automatic line wrapping.
     let maxWidth = max(0, width - 1)
     let right = modelLabel.isEmpty ? "" : "\(modelLabel) "
@@ -259,6 +265,8 @@ final class AgentStatusLine {
     snapshot.maxContext = budget.contextLimit
     snapshot.reservedOutputTokens = budget.reservedOutputTokens
     snapshot.droppedContextMessages = budget.droppedMessageCount
+    snapshot.compactedObservations = budget.compactedObservationCount
+    snapshot.evictedGroups = budget.evictedGroupCount
     refresh(force: true)
   }
 

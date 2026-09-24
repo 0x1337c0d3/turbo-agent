@@ -52,6 +52,8 @@ struct OpenAIRequest: Encodable {
   let model: String
   let messages: [Message]
   let tools: [Tool]?
+  let tool_choice: String?
+  let max_tokens: Int?
 }
 
 struct OpenAIResponse: Decodable {
@@ -274,7 +276,14 @@ final class OpenAIClient: @unchecked Sendable {
       )
     }
 
-    let requestPayload = OpenAIRequest(model: modelName, messages: reqMessages, tools: reqTools)
+    let hasTools = reqTools != nil && !reqTools!.isEmpty
+    let requestPayload = OpenAIRequest(
+      model: modelName, 
+      messages: reqMessages, 
+      tools: reqTools, 
+      tool_choice: hasTools ? "auto" : nil,
+      max_tokens: 8192
+    )
 
     let url = baseURL.appendingPathComponent("chat/completions")
     var request = URLRequest(url: url)
@@ -290,6 +299,23 @@ final class OpenAIClient: @unchecked Sendable {
     let (data, response) = try await session.data(for: request)
     guard let httpRes = response as? HTTPURLResponse, httpRes.statusCode == 200 else {
       let errStr = String(data: data, encoding: .utf8) ?? "Unknown error"
+      if let tools = tools {
+        // Dynamically extract the tool name OpenRouter wants to disable
+        let disablePrefix = "Try disabling \\\""
+        if let range = errStr.range(of: disablePrefix) {
+          let remainder = errStr[range.upperBound...]
+          if let endRange = remainder.range(of: "\\\"") {
+            let toolToRemove = String(remainder[..<endRange.lowerBound])
+            if tools.contains(where: { $0.name == toolToRemove }) {
+              let filteredTools = tools.filter { $0.name != toolToRemove }
+              return try await generate(messages: messages, tools: filteredTools.isEmpty ? nil : filteredTools)
+            }
+          }
+        } else if errStr.contains("support tool use") {
+          // If the model flat-out rejects tools altogether, strip them all.
+          return try await generate(messages: messages, tools: nil)
+        }
+      }
       throw NSError(
         domain: "OpenAIClient", code: -1,
         userInfo: [NSLocalizedDescriptionKey: "HTTP error: \(errStr)"])

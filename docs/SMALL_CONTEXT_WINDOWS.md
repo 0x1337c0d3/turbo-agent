@@ -50,17 +50,23 @@ prompt from becoming unnecessarily large:
 | --- | --- |
 | Standing instructions | `.agents/codex_prompt_8k.md` provides a compact prompt for 8K deployments. |
 | Repository contents | The agent discovers paths and reads relevant files through tools; it does not inject the checkout into every request. |
+| Repository retrieval | At the start of a coding task, a bounded advisory briefing of candidate paths/symbols is injected only when confidence is high and the user has not already named an exact file. |
 | Explicit file attachments | `@path` is opt-in and limited to 16 UTF-8 regular files and 256 KiB combined. The final request budget still applies. |
 | Shell output | `execute_bash` returns at most 8,192 characters and tells the model to narrow a larger result with `grep`, `head`, or `tail`. |
+| Source reads | `read_file` returns whole files only when they fit the tool-result allowance; otherwise it returns a deterministic outline and expects range requests with `start_line`/`end_line`. Partial results carry a SHA-256 revision digest and are labeled `complete="false"`. |
+| Source edits | `edit_file` anchors on exact text plus the `expected_digest` from a read; ambiguous targets fail instead of replacing several regions. `write_file` replaces an existing file only after a complete read of that revision; partial reads never qualify. Successful writes return the new revision digest. |
 | Intermediate AFM messages | When an assistant turn calls tools, later rounds retain the structured calls rather than also repeating its surrounding prose. |
 | Tool catalogue | Only tools advertised for the current session are counted and sent. The persistent-memory tool surface can be off, minimal, or full because schemas themselves consume context. |
 
 This makes code access demand-driven. A request can inspect a project broadly
 with cheap directory and search operations, then spend tokens on the source
-files needed for the current change. Large source still has to be narrowed by
-the agent or attached in smaller pieces; Turbo Agent does not currently create
-LiteCode-style `project_context.md`, `folder_context.md`, or line-range analysis
-files automatically.
+files needed for the current change. Large source is narrowed by the agent itself: `read_file` accepts
+`mode: "auto" | "range" | "outline"` with `start_line` and `end_line`. In
+`auto` mode a file that fits the source-result ceiling returns whole with a
+revision envelope; anything larger returns a deterministic declaration outline
+plus a small initial excerpt and explicit instructions to request a range.
+Turbo Agent does not create LiteCode-style `project_context.md`,
+`folder_context.md`, or line-range analysis files automatically.
 
 ## Continuity without replaying the transcript
 
@@ -124,19 +130,47 @@ generation relies on unbounded transcript growth.
   can still be too large. The runtime rejects it because trimming the user's
   current request would be surprising and unsafe.
 - Tool output is bounded, so broad commands should be narrowed and large files
-  read selectively.
+  read selectively through `read_file` ranges rather than whole reads.
+- Edits are anchored to the revision the model last read. A stale or ambiguous
+  proposal is rejected with guidance rather than applied; the model must reread
+  the affected region before reproposing it.
 - Memory improves continuity only when it contains distilled facts rather than
   transcripts or copies of source. Source code remains authoritative and
   important remembered claims should be checked against the checkout.
 
 ## Relevant checks
 
+`LargeFileEditingTests` characterizes the 8K whole-read accumulation failure
+against a deterministic `AgentLineEditor.c`-shaped C fixture.
+`FileSlicingTests` covers line-preserving slicing, digest stability, envelope
+labeling, and deterministic Swift/C-family outlines.
+`LargeFileReadTests` covers the `read_file` mode/range contract, including
+EOF clamping, invalid-range rejection, and the outline fallback for oversized
+files. `AgentWritePreviewTests` and `LargeFileEditFlowTests` cover the phase 2
+edit contract: unique-target enforcement, explicit `replace_all`,
+`expected_digest` rejection of missing/stale revisions, whole-file replacement
+only after a retained complete read (never from range or outline evidence, in
+`--yolo` mode included), no-op and new-file behavior, and new-revision
+reporting. `ReadRevisionLedgerTests` covers the eligibility store itself.
+`ConversationProjectionTests` covers active-turn context projection, receipt
+compaction, exchange group eviction, and task-state injection.
+`RepositoryRetrievalTests` covers lightweight repository indexing and advisory
+candidate retrieval briefings. `OrchestrationTests` covers multi-hunk patches,
+acyclic task graphs, wave execution, and atomic changes.
+`FederatedContextExecutionTests` covers large-file inspection partitioned across
+bounded narrow workers with hierarchical reduction and common-digest patch validation.
+`LargeFileEvaluationTests` covers phase 7 evaluation metrics, baseline versus safe
+large-file editing comparison, 8K Apple AFM behavior without live inference,
+and direct-loop regression rule-out. The `--orchestration` flag (`auto`, `always`,
+`never`) controls task graph planning. Manual qualitative evaluation on live models
+can be run explicitly with `python3 Scripts/eval-large-file.py`.
 `AgentContextBudgetTests` covers complete-turn trimming, preservation of pinned
 instructions and the Continuity bootstrap, output and safety reserves, tool
 schema accounting, rejection of an oversized newest turn, and working room
 with the default 8K agent surface. `StatusLineTests` covers presentation of the
-budget. The model-free suite runs both through:
+budget. The model-free suite runs through:
 
 ```bash
 make test
 ```
+

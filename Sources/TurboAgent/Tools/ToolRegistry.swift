@@ -1,5 +1,23 @@
 import Foundation
 
+/// Stable success wording for both file-writing tools. The new revision is
+/// always present (phase 2 contract) so the next edit can anchor on it.
+enum AgentWriteResult {
+  static func successMessage(
+    verb: String, path: String, previousContent: String?, updatedContent: String
+  ) -> String {
+    var lines = ["Successfully \(verb) \(path)"]
+    if let previous = previousContent {
+      lines.append("New revision: \(FileRevision.digest(of: updatedContent))")
+      lines.append(
+        "Previous revision: \(FileRevision.digest(of: previous)) (now stale)")
+    } else {
+      lines.append("Revision: \(FileRevision.digest(of: updatedContent))")
+    }
+    return lines.joined(separator: "\n")
+  }
+}
+
 struct ToolRegistry {
   nonisolated(unsafe) static var definitions: [AgentToolDefinition] = baseDefinitions
   nonisolated(unsafe) static var mcpTools: Set<String> = []
@@ -57,38 +75,111 @@ struct ToolRegistry {
     ),
     AgentToolDefinition(
       name: "read_file",
-      description: "Reads the contents of a file",
+      description:
+        "Reads a text file, or a bounded line range of it. Whole-file reads are refused for large files; request mode=outline first, then mode=range with start_line/end_line. Partial results are explicitly labeled with a digest and continuation line.",
       parameters: .object([
         "type": .string("object"),
         "properties": .object([
-          "path": .object(["type": .string("string")])
+          "path": .object(["type": .string("string")]),
+          "start_line": .object([
+            "type": .string("integer"),
+            "description": .string("First line to read, one-based and inclusive."),
+          ]),
+          "end_line": .object([
+            "type": .string("integer"),
+            "description": .string("Last line to read, one-based and inclusive; clamped to EOF."),
+          ]),
+          "mode": .object([
+            "type": .string("string"),
+            "description": .string(
+              "auto (default) returns the whole file only when it fits; otherwise an outline plus a small initial range. range returns only the requested slice. outline returns the section map without source bodies."),
+          ]),
         ]),
         "required": .array([.string("path")]),
       ])
     ),
     AgentToolDefinition(
       name: "write_file",
-      description: "Writes content to a file",
+      description:
+        "Creates a new file, or replaces an existing file only after a complete read_file of its current revision. Set expected_digest to the digest from that read; range or outline reads do not qualify. Use edit_file for bounded changes.",
       parameters: .object([
         "type": .string("object"),
         "properties": .object([
           "path": .object(["type": .string("string")]),
           "content": .object(["type": .string("string")]),
+          "expected_digest": .object([
+            "type": .string("string"),
+            "description": .string(
+              "For existing files: the digest from a complete read_file of the current revision. Not required when creating a new file."),
+          ]),
         ]),
         "required": .array([.string("path"), .string("content")]),
       ])
     ),
     AgentToolDefinition(
       name: "edit_file",
-      description: "Replaces a specific target string with a replacement string in a file.",
+      description:
+        "Replaces one exact target string with a replacement string. The target must occur exactly once unless replace_all is true, and expected_digest must match the digest from your most recent read_file of the file. Returns the new revision digest.",
       parameters: .object([
         "type": .string("object"),
         "properties": .object([
           "path": .object(["type": .string("string")]),
-          "target": .object(["type": .string("string")]),
+          "target": .object([
+            "type": .string("string"),
+            "description": .string(
+              "Exact source text read from the file; it must occur exactly once unless replace_all is set."),
+          ]),
           "replacement": .object(["type": .string("string")]),
+          "expected_digest": .object([
+            "type": .string("string"),
+            "description": .string(
+              "The revision digest from read_file, for example sha256:... Fails as staleRevision if the file changed since that read."),
+          ]),
+          "replace_all": .object([
+            "type": .string("boolean"),
+            "description": .string(
+              "Explicitly replace every occurrence of target. Without it, an ambiguous target fails instead of guessing."),
+          ]),
         ]),
         "required": .array([.string("path"), .string("target"), .string("replacement")]),
+      ])
+    ),
+    AgentToolDefinition(
+      name: "apply_patch",
+      description:
+        "Applies multiple non-adjacent anchored replacements to a file atomically against one observed revision. All targets must exist exactly once, must not overlap, and expected_digest must match the file revision. Returns the new revision digest.",
+      parameters: .object([
+        "type": .string("object"),
+        "properties": .object([
+          "path": .object([
+            "type": .string("string"),
+            "description": .string("Path to the file to patch."),
+          ]),
+          "expected_digest": .object([
+            "type": .string("string"),
+            "description": .string(
+              "The revision digest from read_file, for example sha256:... Fails as staleRevision if the file changed since that read."),
+          ]),
+          "hunks": .object([
+            "type": .string("array"),
+            "description": .string("Array of non-overlapping hunks to apply to the file."),
+            "items": .object([
+              "type": .string("object"),
+              "properties": .object([
+                "target": .object([
+                  "type": .string("string"),
+                  "description": .string("Exact bounded source text to be replaced. Must occur exactly once."),
+                ]),
+                "replacement": .object([
+                  "type": .string("string"),
+                  "description": .string("New replacement source text."),
+                ]),
+              ]),
+              "required": .array([.string("target"), .string("replacement")]),
+            ]),
+          ]),
+        ]),
+        "required": .array([.string("path"), .string("expected_digest"), .string("hunks")]),
       ])
     ),
     AgentToolDefinition(
@@ -329,6 +420,8 @@ struct ToolRegistry {
       result = try await executeWriteFile(call: call, context: context, plan: writePlan)
     case "edit_file":
       result = try await executeEditFile(call: call, context: context, plan: writePlan)
+    case "apply_patch":
+      result = try await executeApplyPatch(call: call, context: context, plan: writePlan)
     case "execute_bash":
       result = try await executeBash(call: call, context: context)
     case "python_scratchpad":
@@ -536,8 +629,19 @@ struct ToolRegistry {
   {
     try context.cancellation.check()
     guard let path = call.stringArgument("path") else { return "Error: invalid arguments" }
+    let resolved = context.path(path)
     do {
-      return try await readFile(context.path(path), context: context)
+      if let large = try await executeLargeFileRead(
+        call: call, path: path, resolvedPath: resolved, context: context)
+      {
+        return large
+      }
+      let content = try await readFile(resolved, context: context)
+      // Legacy whole-file path: one complete read of the current revision.
+      recordRead(resolvedPath: resolved, content: content, complete: true)
+      return content
+    } catch let error as FileSlicerError {
+      return "Error: \(error.description)"
     } catch is CancellationError {
       throw CancellationError()
     } catch {
@@ -545,15 +649,32 @@ struct ToolRegistry {
     }
   }
 
+  /// Phase 2: complete reads feed the whole-file-replacement ledger. The
+  /// resolved path keys the store, never the model-authored path string.
+  private static func recordRead(resolvedPath: String, content: String, complete: Bool) {
+    ReadRevisionLedger.shared.record(
+      resolvedPath: resolvedPath, digest: FileRevision.digest(of: content),
+      byteCount: content.utf8.count, complete: complete)
+  }
+
   private static func executeWriteFile(
     call: ParsedToolCall, context: AgentToolContext, plan: AgentWritePlan?
   ) async throws -> String {
     try context.cancellation.check()
-    guard let plan else { return "Error: write was not previewed" }
+    guard let plan else { return "No-op: the replacement content is identical to the existing file; no write was performed." }
     do {
+      if plan.originalContent == nil {
+        // The creation path still confirms the target did not appear while
+        // the diff awaited approval.
+        try await AgentWritePreview.verifyCreationIsStillNew(
+          plan.resolvedPath, context: context)
+      }
       try await plan.verifySourceIsUnchanged(context: context)
       try await writeFile(plan.resolvedPath, content: plan.updatedContent, context: context)
-      return "Successfully wrote to \(plan.path)"
+      RepositoryIndex.forWorkspace(context.directory).refresh(resolvedPath: plan.resolvedPath)
+      return AgentWriteResult.successMessage(
+        verb: "wrote", path: plan.path, previousContent: plan.originalContent,
+        updatedContent: plan.updatedContent)
     } catch is CancellationError {
       throw CancellationError()
     } catch {
@@ -565,16 +686,80 @@ struct ToolRegistry {
     call: ParsedToolCall, context: AgentToolContext, plan: AgentWritePlan?
   ) async throws -> String {
     try context.cancellation.check()
-    guard let plan else { return "Error: edit was not previewed" }
+    guard let plan else { return "No-op: the replacement content is identical to the existing file; no write was performed." }
     do {
       try await plan.verifySourceIsUnchanged(context: context)
       try await writeFile(plan.resolvedPath, content: plan.updatedContent, context: context)
-      return "Successfully updated \(plan.path)"
+      RepositoryIndex.forWorkspace(context.directory).refresh(resolvedPath: plan.resolvedPath)
+      return AgentWriteResult.successMessage(
+        verb: "updated", path: plan.path, previousContent: plan.originalContent,
+        updatedContent: plan.updatedContent)
     } catch is CancellationError {
       throw CancellationError()
     } catch {
       return "Error editing file: \(error)"
     }
+  }
+
+  private static func executeApplyPatch(
+    call: ParsedToolCall, context: AgentToolContext, plan: AgentWritePlan?
+  ) async throws -> String {
+    try context.cancellation.check()
+    guard let plan else {
+      return "No-op: the replacement content is identical to the existing file; no write was performed."
+    }
+    do {
+      try await plan.verifySourceIsUnchanged(context: context)
+      try await writeFile(plan.resolvedPath, content: plan.updatedContent, context: context)
+      RepositoryIndex.forWorkspace(context.directory).refresh(resolvedPath: plan.resolvedPath)
+      let validation = validateWholeFile(path: plan.resolvedPath, content: plan.updatedContent)
+      var message = AgentWriteResult.successMessage(
+        verb: "patched", path: plan.path, previousContent: plan.originalContent,
+        updatedContent: plan.updatedContent)
+      if !validation.isEmpty {
+        message += "\n" + validation
+      }
+      return message
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      return "Error applying patch: \(error)"
+    }
+  }
+
+  static func validateWholeFile(path: String, content: String) -> String {
+    guard let reread = try? String(contentsOfFile: path, encoding: .utf8), reread == content else {
+      return "[Validation Warning: written file could not be reread cleanly as UTF-8]"
+    }
+    let sections = FileOutlineBuilder.sections(of: content, path: path)
+    let declCount = sections.filter { $0.kind != "block" }.count
+
+    let ext = (path as NSString).pathExtension.lowercased()
+    var syntaxNotes: [String] = []
+    if ["swift", "c", "h", "cpp", "cc", "hpp", "js", "ts", "json"].contains(ext) {
+      var braces = 0
+      var brackets = 0
+      var parens = 0
+      for char in content {
+        switch char {
+        case "{": braces += 1
+        case "}": braces -= 1
+        case "[": brackets += 1
+        case "]": brackets -= 1
+        case "(": parens += 1
+        case ")": parens -= 1
+        default: break
+        }
+      }
+      if braces != 0 { syntaxNotes.append("unbalanced braces (net: \(braces))") }
+      if brackets != 0 { syntaxNotes.append("unbalanced brackets (net: \(brackets))") }
+      if parens != 0 { syntaxNotes.append("unbalanced parentheses (net: \(parens))") }
+    }
+
+    if !syntaxNotes.isEmpty {
+      return "[Validation Warning: \(syntaxNotes.joined(separator: ", "))]"
+    }
+    return "[Validation: UTF-8 verified; outline regenerated with \(declCount) declarations]"
   }
 
   private static func readFile(_ path: String, context: AgentToolContext) async throws -> String {
@@ -583,7 +768,22 @@ struct ToolRegistry {
     return try String(contentsOfFile: path, encoding: .utf8)
   }
 
-  private static func writeFile(_ path: String, content: String, context: AgentToolContext)
+  /// Phase 1 of docs/LARGE_FILE_EDITING.md: revisioned line-range reads with
+  /// deterministic outlines. ACP client reads stay intact; slicing happens
+  /// after the client returns content.
+  private static func executeLargeFileRead(
+    call: ParsedToolCall, path: String, resolvedPath: String, context: AgentToolContext
+  ) async throws -> String? {
+    guard let request = LargeFileRead.Request(arguments: call.arguments) else { return nil }
+    // ACP client reads stay intact; slicing happens after the client returns.
+    let raw = try await readFile(resolvedPath, context: context)
+    return try LargeFileRead.render(request: request, content: raw, path: path) { sliceComplete in
+      // Only an unlabeled complete read authorizes whole-file replacement.
+      recordRead(resolvedPath: resolvedPath, content: raw, complete: sliceComplete)
+    }
+  }
+
+  static func writeFile(_ path: String, content: String, context: AgentToolContext)
     async throws
   {
     try context.cancellation.check()
@@ -625,9 +825,13 @@ struct ToolRegistry {
     do {
       let output = try await ShellCommand.run(
         command, directory: context.directory, cancellation: context.cancellation)
-      guard output.count > 8192 else { return output }
-      return String(output.prefix(8192))
-        + "\n... (output truncated: too large for context window. please use grep, head, or tail to narrow it down)"
+      let maxOutputChars = 2_500
+      guard output.count > maxOutputChars else { return output }
+      let head = String(output.prefix(600))
+      let tail = String(output.suffix(1_800))
+      return head
+        + "\n... (output truncated: \(output.count) characters too large for context window. please use grep, head, or tail to narrow it down)\n..."
+        + tail
     } catch is CancellationError {
       throw CancellationError()
     } catch {
@@ -656,8 +860,10 @@ struct ToolRegistry {
         "python3 \"\(tempFile.path)\"", directory: context.directory,
         cancellation: context.cancellation)
       let baseOutput: String
-      if rawOutput.count > 8192 {
-        baseOutput = String(rawOutput.prefix(8192)) + "\n... (output truncated)"
+      if rawOutput.count > 2_500 {
+        let head = String(rawOutput.prefix(600))
+        let tail = String(rawOutput.suffix(1_800))
+        baseOutput = head + "\n... (output truncated)\n..." + tail
       } else {
         baseOutput = rawOutput.isEmpty ? "(Executed successfully with no output)" : rawOutput
       }

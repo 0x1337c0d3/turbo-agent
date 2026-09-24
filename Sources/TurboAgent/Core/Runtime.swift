@@ -15,6 +15,15 @@ final class AgentRuntime: @unchecked Sendable {
   var remainingToolCalls = 64
   var subagentDepth = 0
   var activeBackendKind: AgentBackendKind
+  var latestPreparedBudget: AgentContextBudget?
+  var latestTelemetry: LargeFileEditingTelemetry?
+
+  var maxInferenceConcurrency: Int {
+    if currentTarget.isLocal || (activeBackendKind == .apple && applePCCPolicy == .disable) {
+      return 1
+    }
+    return 3
+  }
 
   public enum ModelTarget: String, Sendable, CaseIterable {
     case appleAutomatic = "apple"
@@ -165,8 +174,12 @@ final class AgentRuntime: @unchecked Sendable {
       in: messages, fallback: config.systemPrompt)
     let prepared = try AgentContextAssembler.prepare(
       messages: messages, systemPrompt: effectiveInstructions, tools: activeTools,
-      contextLimit: contextLimit)
+      contextLimit: contextLimit,
+      compactedObservationCount: nil,
+      evictedGroupCount: nil,
+      estimatedTokensSaved: latestTelemetry?.estimatedTokensSaved)
     statusLine.setContextBudget(prepared.budget)
+    latestPreparedBudget = prepared.budget
 
     return try await selectedBackend.generate(
       messages: prepared.messages, tools: activeTools, interaction: interaction,

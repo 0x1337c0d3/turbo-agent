@@ -12,7 +12,7 @@ the TurboFieldfare Gemma/Metal runtime or model files.
 
 - macOS 26 or later
 - Swift 6.2 or later
-- Apple Silicon for Apple Foundation Models
+- macOS 27 and Apple Silicon for Apple Foundation Models
 
 ## Build and run
 
@@ -78,6 +78,24 @@ make test
 
 This runs the serial Swift test suite, terminal editor and transcript tests,
 and the tracked-symlink and Markdown-link checks.
+
+## Safe large-file editing
+
+`read_file` supports bounded, revisioned reads of files larger than the model
+window. Request `mode: "outline"` to get a deterministic section map without
+source bodies, then request specific ranges with `start_line` and `end_line`.
+Every partial result is explicitly labeled with the file's SHA-256 revision
+digest, the actual line range returned, and the continuation line to request
+next. Files that fit the current request budget still return whole; files
+that do not are never silently truncated.
+
+Edits are anchored against that revision: `edit_file` requires the
+`expected_digest` from a read, replaces its exact `target` once (ambiguous
+targets fail unless `replace_all` is explicit), and returns the new revision
+digest after the approved write. `write_file` replaces an existing file only
+after a complete read of its current revision; range or outline reads never
+authorize whole-file replacement. New-file creation is unchanged. See
+[large-file editing](docs/LARGE_FILE_EDITING.md) for the plan this implements.
 
 ## Documentation
 
