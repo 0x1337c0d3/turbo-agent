@@ -143,4 +143,34 @@ struct TerminalTranscript {
     rows.append(row + "\u{001B}[0m")
     return rows
   }
+
+  /// Calculates visual cell width of a formatted string, skipping ANSI SGR sequences.
+  static func cellWidth(of text: String) -> Int {
+    var column = 0
+    var index = text.startIndex
+    while index < text.endIndex {
+      let character = text[index]
+      if character == "\u{001B}", let end = text[index...].firstIndex(of: "m") {
+        let sequence = String(text[index...end])
+        if sequence.dropFirst(2).dropLast().allSatisfy({ $0.isNumber || $0 == ";" }),
+          sequence.hasPrefix("\u{001B}[")
+        {
+          index = text.index(after: end)
+          continue
+        }
+      }
+      if character == "\n" {
+        column = 0
+      } else if character == "\t" {
+        column += (8 - column % 8)
+      } else {
+        let scalars = character.unicodeScalars
+        let cells = scalars.map { max(0, Int(wcwidth(Int32($0.value)))) }.max() ?? 0
+        let emoji = scalars.contains { $0.value == 0xFE0F || $0.properties.isEmojiPresentation }
+        column += emoji ? max(2, cells) : cells
+      }
+      index = text.index(after: index)
+    }
+    return column
+  }
 }

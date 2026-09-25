@@ -170,28 +170,69 @@ static unsigned char delete_line(EditLine *editor, int key) {
     return CC_REFRESH;
 }
 
+static int calculate_prompt_rows(const wchar_t *buffer, size_t length, int columns) {
+    if (columns < 2) return 1;
+    int rows = 1, column = 2; // Prompt is "> " (2 columns)
+    for (size_t i = 0; i < length; i++) {
+        wchar_t p = buffer[i];
+        if (p == L'\n') {
+            rows++;
+            column = 0;
+            continue;
+        }
+        int width = (p == L'\t') ? (8 - column % 8) : wcwidth(p);
+        if (width < 0) width = 2;
+        if (column + width > columns) {
+            rows++;
+            column = 0;
+        }
+        column += width;
+        if (column >= columns) {
+            rows++;
+            column = 0;
+        }
+    }
+    return rows;
+}
+
 static unsigned char transcript_action(EditLine *editor, int action) {
     PromptState *state = prompt_state(editor);
     if (!state->transcript_action) return CC_NORM;
     struct winsize size;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_col < 2) return CC_NORM;
-    // The visible prompt is "> ". Reserve its complete wrapped draft, including
-    // lines after the cursor, before asking Swift to repaint the transcript.
-    int rows = 1, column = 2;
+
+    // 1. Snapshot complete edit buffer, logical insertion offset, and rendered prompt height.
     const LineInfoW *line = el_wline(editor);
-    for (const wchar_t *p = line->buffer; p < line->lastchar; p++) {
-        if (*p == L'\n') { rows++; column = 0; continue; }
-        int width = *p == L'\t' ? 8 - column % 8 : wcwidth(*p);
-        if (width < 0) width = 2;
-        if (column + width > size.ws_col) { rows++; column = 0; }
-        column += width;
-        if (column >= size.ws_col) { rows++; column = 0; }
-    }
+    size_t cursor_offset = (size_t)(line->cursor - line->buffer);
+    size_t buffer_length = (size_t)(line->lastchar - line->buffer);
+    int rows = calculate_prompt_rows(line->buffer, buffer_length, size.ws_col);
+
+    // 2. Let Swift repaint the transcript and leave the cursor at the calculated prompt origin.
     if (!state->transcript_action(action, rows)) return CC_NORM;
-    // EL_REFRESH forgets the old screen coordinates, but retains the entire
-    // editing buffer and insertion point. CC_REDISPLAY would clear old lines
-    // relative to the *new* origin and erase part of the repainted transcript.
+
+    // 3. Force one full libedit redisplay from that new origin, without allowing
+    // libedit's old display coordinates to clear transcript rows.
     el_set(editor, EL_REFRESH);
+    fflush(stdout);
+
+    // 4. Restore the logical insertion point if it changed.
+    const LineInfoW *refreshed_line = el_wline(editor);
+    if (refreshed_line && buffer_length > 0) {
+        size_t current_offset = (size_t)(refreshed_line->cursor - refreshed_line->buffer);
+        if (current_offset != cursor_offset) {
+            size_t count = current_offset > cursor_offset
+                ? current_offset - cursor_offset
+                : cursor_offset - current_offset;
+            char *movement = malloc(count + 1);
+            if (movement) {
+                memset(movement, current_offset > cursor_offset ? '\002' : '\006', count);
+                movement[count] = '\0';
+                el_push(editor, movement);
+                free(movement);
+            }
+        }
+    }
+
     return CC_NORM;
 }
 

@@ -47,10 +47,14 @@ let status = AgentStatusLine()
 status.start(maxContext: 1000)
 AgentTerminal.beginTranscript()
 let long = CommandLine.arguments[1].contains("long-output")
-let result = long ? (0..<60).map { "OUTPUT_LINE_\($0)" }.joined(separator: "\n")
-                  : "PREVIEW\nEXPANDED_PAYLOAD\nmore details"
-AgentTerminal.toolResult(header: "example_tool()", result: result, limit: 7)
-terminalPrint("Assistant answer")
+let result1 = long ? (0..<60).map { "TOOL1_OUTPUT_\($0)" }.joined(separator: "\n")
+                   : "PREVIEW_1\nFIRST_EXPANDED_PAYLOAD\nmore details 1"
+let result2 = long ? (0..<60).map { "TOOL2_OUTPUT_\($0)" }.joined(separator: "\n")
+                   : "PREVIEW_2\nSECOND_EXPANDED_PAYLOAD\nmore details 2"
+AgentTerminal.toolResult(header: "tool_one()", result: result1, limit: 7)
+terminalPrint("Assistant middle answer")
+AgentTerminal.toolResult(header: "tool_two()", result: result2, limit: 7)
+terminalPrint("Assistant final answer")
 if CommandLine.arguments[1].contains("generation") {
     Task {
         await checkGeneration()
@@ -84,6 +88,10 @@ class Screen:
         self.row = self.column = 0
         self.top, self.bottom = 0, rows - 1
         self.saved = (0, 0)
+
+    @property
+    def cursor(self):
+        return (self.row, self.column)
 
     def newline(self):
         if self.row == self.bottom:
@@ -164,6 +172,24 @@ class TranscriptTerminal(Terminal):
         self.screen.feed(output)
         return output
 
+    def drain(self, timeout=0.05):
+        if self.buffer:
+            self.screen.feed(self.buffer)
+            self.buffer = b''
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = max(0.005, deadline - time.monotonic())
+            readable, _, _ = select.select([self.master], [], [], remaining)
+            if not readable:
+                break
+            try:
+                chunk = os.read(self.master, 65536)
+                if not chunk:
+                    break
+                self.screen.feed(chunk)
+            except (BlockingIOError, OSError):
+                break
+
     def send(self, data):
         # Feed large drafts while draining echo, avoiding PTY backpressure.
         flags = fcntl.fcntl(self.master, fcntl.F_GETFL)
@@ -186,13 +212,8 @@ class TranscriptTerminal(Terminal):
 
     def redraw(self, keys):
         self.send(keys)
-        # Transcript repaint begins here; the next prompt belongs to EL_REFRESH.
         self.read_until(b'\x1b[1;1H')
-        self.read_until(b'> ')
-        # A round-trip edit forces us to consume the rest of the prompt refresh.
-        os.write(self.master, b'\x05~')
-        self.read_until(b'~')
-        os.write(self.master, b'\x7f')
+        self.drain()
 
 
 def main():
@@ -219,6 +240,7 @@ def main():
                         '-import-objc-header', str(include / 'AgentLineEditor.h'),
                         str(ROOT / 'Sources/TurboAgent/Terminal/TerminalText.swift'),
                         str(ROOT / 'Sources/TurboAgent/Terminal/TerminalTranscript.swift'),
+                        str(ROOT / 'Sources/TurboAgent/Terminal/TerminalViewport.swift'),
                         str(ROOT / 'Sources/TurboAgent/Terminal/StatusLine.swift'),
                         str(ROOT / 'Sources/TurboAgent/Terminal/TerminalGeneration.swift'),
                         str(source), str(editor), '-ledit', '-o', str(executable)], check=True)
@@ -226,22 +248,40 @@ def main():
             terminal = TranscriptTerminal(executable, directory / f'history-{number}')
             try:
                 terminal.read_until(b'> ')
-                assert 'EXPANDED_PAYLOAD' not in terminal.screen.text
-                terminal.send(draft + toggle)
-                terminal.read_until(b'\x1b[1;1H')
+                assert 'FIRST_EXPANDED_PAYLOAD' not in terminal.screen.text
+                assert 'SECOND_EXPANDED_PAYLOAD' not in terminal.screen.text
+                assert '(ctrl+o to expand)' in terminal.screen.text
+                assert 'tool_one()' in terminal.screen.text
+                assert 'Assistant middle answer' in terminal.screen.text
+                assert 'tool_two()' in terminal.screen.text
+                assert 'Assistant final answer' in terminal.screen.text
+                if draft:
+                    terminal.send(draft)
+                    terminal.drain()
+                initial_cursor = terminal.screen.cursor
+
+                # Toggle expand
+                terminal.redraw(toggle)
                 if name != 'draft taller than screen':
-                    terminal.read_until(b'> ')
-                if name != 'draft taller than screen':
-                    assert 'EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
-                if name != 'draft taller than screen':
-                    assert 'Assistant answer' in terminal.screen.text
+                    assert 'FIRST_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+                    assert 'SECOND_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+                    assert 'Assistant middle answer' in terminal.screen.text
+                    assert 'Assistant final answer' in terminal.screen.text
+                    assert '[ctrl+o to collapse]' in terminal.screen.text
+                    assert terminal.screen.cursor == initial_cursor, (name, terminal.screen.cursor, initial_cursor)
                 assert 'Ready |' in ''.join(terminal.screen.lines[-1])
-                # Repeated toggles must neither submit nor move the insertion point.
-                terminal.send(toggle)
-                terminal.read_until(b'\x1b[1;1H')
+
+                # Toggle collapse
+                terminal.redraw(toggle)
+                assert 'FIRST_EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
+                assert 'SECOND_EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
                 if name != 'draft taller than screen':
-                    terminal.read_until(b'> ')
-                assert 'EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
+                    assert '(ctrl+o to expand)' in terminal.screen.text
+                    assert 'Assistant middle answer' in terminal.screen.text
+                    assert 'Assistant final answer' in terminal.screen.text
+                    assert terminal.screen.cursor == initial_cursor, (name, terminal.screen.cursor, initial_cursor)
+                assert 'Ready |' in ''.join(terminal.screen.lines[-1])
+
                 terminal.send(b'!\r')
                 terminal.read_until(b'RESULT:')
                 actual = terminal.read_until(b'\r\n').strip()
@@ -257,12 +297,12 @@ def main():
         try:
             terminal.read_until(b'> ')
             terminal.redraw(b'\x0f')
-            assert 'OUTPUT_LINE_59' in terminal.screen.text
-            assert 'OUTPUT_LINE_0\n' not in terminal.screen.text
-            for _ in range(3):
+            assert 'TOOL2_OUTPUT_59' in terminal.screen.text
+            assert 'TOOL1_OUTPUT_0\n' not in terminal.screen.text
+            for _ in range(6):
                 terminal.redraw(b'\x1b[5~')
-            assert 'OUTPUT_LINE_0' in terminal.screen.text, terminal.screen.text
-            terminal.send(b'\x1b[6~\x1b[6~\x1b[6~\r')
+            assert 'TOOL1_OUTPUT_0' in terminal.screen.text, terminal.screen.text
+            terminal.send(b'\x1b[6~' * 6 + b'\r')
             terminal.read_until(b'RESULT:')
             terminal.read_until(b'\r\n')
             terminal.submit(b'next', 'next')
@@ -275,16 +315,30 @@ def main():
             terminal = TranscriptTerminal(executable, directory / f'generation-{number}')
             try:
                 terminal.read_until(b'STREAMING_BEGIN')
+                terminal.drain()
+                continuation_cursor = terminal.screen.cursor
                 # Enhanced encodings can arrive in separate input events.
                 terminal.send(key[:1])
                 if len(key) > 1:
                     time.sleep(0.005)
                     terminal.send(key[1:])
                 terminal.read_until(b'[ctrl+o to collapse]')
-                assert 'EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+                terminal.drain()
+                assert 'FIRST_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+                assert 'SECOND_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+                assert 'STREAMING_BEGIN' in terminal.screen.text, terminal.screen.text
+                assert terminal.screen.cursor == continuation_cursor, (terminal.screen.cursor, continuation_cursor)
+                assert 'Ready |' in ''.join(terminal.screen.lines[-1])
+
                 terminal.send(key)
                 terminal.read_until(b'(ctrl+o to expand)')
-                assert 'EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
+                terminal.drain()
+                assert 'FIRST_EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
+                assert 'SECOND_EXPANDED_PAYLOAD' not in terminal.screen.text, terminal.screen.text
+                assert 'STREAMING_BEGIN' in terminal.screen.text, terminal.screen.text
+                assert terminal.screen.cursor == continuation_cursor, (terminal.screen.cursor, continuation_cursor)
+                assert 'Ready |' in ''.join(terminal.screen.lines[-1])
+
                 terminal.send(b'\x1b')
                 terminal.read_until(b'GENERATION_FINISHED')
                 assert terminal.process.wait(timeout=5) == 0
@@ -300,7 +354,8 @@ def main():
             fcntl.ioctl(terminal.master, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 50, 0, 0))
             terminal.screen = Screen(18, 50)
             terminal.redraw(b'\x0f')
-            assert 'EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+            assert 'FIRST_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
+            assert 'SECOND_EXPANDED_PAYLOAD' in terminal.screen.text, terminal.screen.text
             assert 'Ready |' in ''.join(terminal.screen.lines[-1])
             terminal.send(b'\r')
             terminal.read_until(b'RESULT:')
@@ -315,7 +370,8 @@ def main():
                               input=b'one\ntwo\nthree\n', capture_output=True, check=True)
         assert b'Ctrl-O' not in pipe.stdout
         assert b'\x1b[1;1H' not in pipe.stdout
-        assert b'EXPANDED_PAYLOAD' not in pipe.stdout
+        assert b'FIRST_EXPANDED_PAYLOAD' not in pipe.stdout
+        assert b'SECOND_EXPANDED_PAYLOAD' not in pipe.stdout
         print('PASS: piped input retains compact output and emits no redraw controls')
     print(f'{len(cases) + 6} transcript PTY/pipe checks passed.')
 

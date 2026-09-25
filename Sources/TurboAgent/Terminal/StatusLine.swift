@@ -119,41 +119,28 @@ enum AgentTerminal {
 
   private static func repaint(promptRows: Int) {
     guard let size, var content = transcript else { return }
-    // Leave the final column unused to avoid pending terminal autowrap.
-    var rows = content.rows(width: size.columns - 1)
-    let reserved = min(max(0, promptRows), size.rows - 2)
-    let height = size.rows - 1 - reserved
-    // A trailing empty line is the editor's insertion point, not transcript.
-    if reserved > 0, rows.last == "\u{001B}[0m" { rows.removeLast() }
-    content.scrollOffset = min(max(0, content.scrollOffset), max(0, rows.count - height))
+    let viewport = TerminalViewport(
+      terminalSize: size,
+      promptRows: promptRows,
+      transcript: content,
+      footer: footer
+    )
+    content.scrollOffset = viewport.clampedScrollOffset
     transcript = content
-    let end = rows.count - content.scrollOffset
-    let visible = Array(rows[max(0, end - height)..<end])
-    let padding = height - visible.count
-    var output = "\u{001B}[0m\u{001B}[1;\(size.rows - 1)r"
-    if let footer {
-      output += "\u{001B}[\(size.rows);1H\u{001B}[2K\u{001B}[90m"
-      output += footer.text(width: size.columns) + "\u{001B}[0m"
-    }
-    for row in 0..<(size.rows - 1) {
-      output += "\u{001B}[\(row + 1);1H\u{001B}[2K"
-      let index = row - padding
-      if row < height, index >= 0, index < visible.count { output += visible[index] }
-    }
-    if reserved > 0 {
-      output += "\u{001B}[\(height + 1);1H"
-    } else {
-      // Streaming resumes at the end of the retained last row.
-      output += "\u{001B}[\(height);1H" + (visible.last ?? "")
-    }
-    write(output)
+    write(viewport.render())
   }
+
+  nonisolated(unsafe) static var customWriter: ((String) -> Void)? = nil
 
   static func write(_ text: String) {
     lock.lock()
     defer { lock.unlock() }
-    Swift.print(text, terminator: "")
-    fflush(stdout)
+    if let customWriter {
+      customWriter(text)
+    } else {
+      Swift.print(text, terminator: "")
+      fflush(stdout)
+    }
   }
 }
 

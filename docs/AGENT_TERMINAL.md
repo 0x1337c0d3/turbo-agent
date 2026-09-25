@@ -106,7 +106,7 @@ applied, and no other protocol deviations occurred.
 ## Model-free checks
 
 ```bash
-Scripts/test.sh --filter 'TerminalTranscriptTests|StatusLineTests|SecurityTests|ACPExecutableTests'
+Scripts/test.sh --filter 'TerminalTranscriptTests|TerminalViewportTests|StatusLineTests|SecurityTests|ACPExecutableTests'
 python3 Scripts/test-agent-editor.py
 python3 Scripts/test-agent-transcript.py
 ```
