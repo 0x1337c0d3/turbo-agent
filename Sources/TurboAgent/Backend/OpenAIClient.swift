@@ -4,11 +4,13 @@ struct OpenAISettings: Decodable {
   let openaiApiKey: String?
   let openaiBaseUrl: String?
   let openaiModel: String?
+  let openaiUseResponsesApi: Bool?
 
   enum CodingKeys: String, CodingKey {
     case openaiApiKey = "openai_api_key"
     case openaiBaseUrl = "openai_base_url"
     case openaiModel = "openai_model"
+    case openaiUseResponsesApi = "openai_use_responses_api"
   }
 }
 
@@ -50,7 +52,9 @@ struct OpenAIRequest: Encodable {
   }
 
   let model: String
-  let messages: [Message]
+  let instructions: String?
+  let messages: [Message]?
+  let input: [Message]?
   let tools: [Tool]?
   let tool_choice: String?
   let max_tokens: Int?
@@ -90,7 +94,19 @@ struct OpenAIResponse: Decodable {
     }
     let message: Message
   }
-  let choices: [Choice]
+  struct OutputItem: Decodable {
+    let type: String?
+    let role: String?
+    
+    struct ContentItem: Decodable {
+      let type: String?
+      let text: String?
+    }
+    let content: [ContentItem]?
+  }
+
+  let choices: [Choice]?
+  let output: [OutputItem]?
   let usage: Usage?
 }
 
@@ -138,13 +154,15 @@ final class OpenAIClient: @unchecked Sendable {
   let apiKey: String
   let baseURL: URL
   let modelName: String
+  let useResponsesApi: Bool
   private(set) var cachedContextLength: Int?
   var session: URLSession = .shared
 
-  init(apiKey: String, baseURL: URL, modelName: String, session: URLSession = .shared) {
+  init(apiKey: String, baseURL: URL, modelName: String, useResponsesApi: Bool = false, session: URLSession = .shared) {
     self.apiKey = apiKey
     self.baseURL = baseURL
     self.modelName = modelName
+    self.useResponsesApi = useResponsesApi
     self.session = session
   }
 
@@ -162,7 +180,8 @@ final class OpenAIClient: @unchecked Sendable {
       ?? "https://api.openai.com/v1/"
     guard let resolvedBaseURL = URL(string: base) else { return nil }
     let resolvedModel = settings?.openaiModel ?? environment["OPENAI_MODEL"] ?? "gpt-4o"
-    self.init(apiKey: resolvedKey, baseURL: resolvedBaseURL, modelName: resolvedModel)
+    let useResponses = settings?.openaiUseResponsesApi ?? (environment["OPENAI_USE_RESPONSES_API"] == "true")
+    self.init(apiKey: resolvedKey, baseURL: resolvedBaseURL, modelName: resolvedModel, useResponsesApi: useResponses)
   }
 
   func fetchModelContextLength(model: String? = nil) async -> Int? {
@@ -275,17 +294,65 @@ final class OpenAIClient: @unchecked Sendable {
         )
       )
     }
-
     let hasTools = reqTools != nil && !reqTools!.isEmpty
-    let requestPayload = OpenAIRequest(
-      model: modelName, 
-      messages: reqMessages, 
-      tools: reqTools, 
-      tool_choice: hasTools ? "auto" : nil,
-      max_tokens: 8192
-    )
+    var systemInstruction: String? = nil
+    var filteredMessages: [OpenAIRequest.Message] = []
+    
+    for msg in reqMessages {
+      if useResponsesApi && msg.role == "system" {
+        if let existing = systemInstruction {
+          systemInstruction = existing + "\n" + (msg.content ?? "")
+        } else {
+          systemInstruction = msg.content
+        }
+      } else {
+        filteredMessages.append(msg)
+      }
+    }
 
-    let url = baseURL.appendingPathComponent("chat/completions")
+    struct ORResponsesTool: Encodable {
+      let type: String
+      let name: String
+      let description: String
+      let parameters: JSONValue
+    }
+
+    struct ORResponsesRequest: Encodable {
+      let model: String
+      let instructions: String?
+      let input: [OpenAIRequest.Message]?
+      let tools: [ORResponsesTool]?
+    }
+
+    let encoder = JSONEncoder()
+    let httpBody: Data
+
+    if useResponsesApi {
+      let orTools = tools?.map { t in
+        ORResponsesTool(type: "function", name: t.name, description: t.description, parameters: t.parameters)
+      }
+      let requestPayload = ORResponsesRequest(
+        model: modelName,
+        instructions: systemInstruction,
+        input: filteredMessages,
+        tools: (orTools != nil && !orTools!.isEmpty) ? orTools : nil
+      )
+      httpBody = try encoder.encode(requestPayload)
+    } else {
+      let requestPayload = OpenAIRequest(
+        model: modelName, 
+        instructions: nil,
+        messages: reqMessages,
+        input: nil,
+        tools: reqTools, 
+        tool_choice: hasTools ? "auto" : nil,
+        max_tokens: 8192
+      )
+      httpBody = try encoder.encode(requestPayload)
+    }
+
+    let endpoint = useResponsesApi ? "responses" : "chat/completions"
+    let url = baseURL.appendingPathComponent(endpoint)
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -293,8 +360,10 @@ final class OpenAIClient: @unchecked Sendable {
     request.setValue(apiKey, forHTTPHeaderField: "api-key")  // For Azure / Microsoft Foundry
     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")  // For other generic gateways
 
-    let encoder = JSONEncoder()
-    request.httpBody = try encoder.encode(requestPayload)
+    request.httpBody = httpBody
+    if useResponsesApi {
+       
+    }
 
     let (data, response) = try await session.data(for: request)
     guard let httpRes = response as? HTTPURLResponse, httpRes.statusCode == 200 else {
@@ -322,22 +391,31 @@ final class OpenAIClient: @unchecked Sendable {
     }
 
     let res = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-    guard let message = res.choices.first?.message else {
-      return ("", [], res.usage)
+    
+    var finalContent = ""
+    var toolCallsList: [OpenAIResponse.Choice.Message.ToolCall] = []
+
+    if let choices = res.choices, let message = choices.first?.message {
+      finalContent = message.content ?? ""
+      toolCallsList = message.toolCalls ?? []
+    } else if let output = res.output, let firstItem = output.first {
+      if let contentArray = firstItem.content {
+        finalContent = contentArray.compactMap { $0.text }.joined(separator: "")
+      }
+      // Assuming tool calls are provided similarly in OpenRouter's responses API output, or we extract if present.
+      // We didn't define toolCalls in OutputItem, but if it exists we would parse it.
     }
 
     var calls: [ParsedToolCall] = []
-    if let toolCalls = message.toolCalls {
-      for tc in toolCalls {
-        let argsData = tc.function.arguments.data(using: .utf8)!
-        let argsJSON = (try? JSONDecoder().decode(JSONValue.self, from: argsData)) ?? .object([:])
-        calls.append(
-          ParsedToolCall(
-            id: tc.id, name: tc.function.name, arguments: argsJSON,
-            argumentsJSON: tc.function.arguments))
-      }
+    for tc in toolCallsList {
+      let argsData = tc.function.arguments.data(using: .utf8)!
+      let argsJSON = (try? JSONDecoder().decode(JSONValue.self, from: argsData)) ?? .object([:])
+      calls.append(
+        ParsedToolCall(
+          id: tc.id, name: tc.function.name, arguments: argsJSON,
+          argumentsJSON: tc.function.arguments))
     }
 
-    return (message.content ?? "", calls, res.usage)
+    return (finalContent, calls, res.usage)
   }
 }

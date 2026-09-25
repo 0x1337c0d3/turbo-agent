@@ -295,7 +295,7 @@ final class InferenceBackendTests: XCTestCase, @unchecked Sendable {
       }
       """
     let response = try JSONDecoder().decode(OpenAIResponse.self, from: Data(json.utf8))
-    XCTAssertEqual(response.choices.first?.message.content, "Hello world!")
+    XCTAssertEqual(response.choices?.first?.message.content, "Hello world!")
     XCTAssertEqual(response.usage?.promptTokens, 150)
     XCTAssertEqual(response.usage?.completionTokens, 25)
     XCTAssertEqual(response.usage?.totalTokens, 175)
