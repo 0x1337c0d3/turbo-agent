@@ -100,6 +100,7 @@ authorize whole-file replacement. New-file creation is unchanged. See
 ## Documentation
 
 - [Small context windows](docs/SMALL_CONTEXT_WINDOWS.md)
+- [Large-file editing](docs/LARGE_FILE_EDITING.md)
 - [Terminal interface](docs/AGENT_TERMINAL.md)
 - [MCP configuration](docs/AGENT_MCP.md)
 - [ACP and Zed setup](docs/AGENT_ACP.md)
