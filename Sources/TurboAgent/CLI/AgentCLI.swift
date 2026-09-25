@@ -114,9 +114,21 @@ public enum AgentCommand {
       return
     }
     let config = try AgentConfig(arguments: arguments)
-    printColor(
-      "Starting TurboAgent [Backend: \(config.backend.rawValue), PCC: \(config.pccPolicy.rawValue)]\n",
-      color: "blue")
+    print("\u{001B}[2J\u{001B}[H", terminator: "")
+    print(
+"""
+
+
+
+
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀  TurboAgent CLI 1.0.0
+    ▀▀▀▀        \(config.backend.rawValue)
+    ▀▀▀▀        PCC: \(config.pccPolicy.rawValue)
+    ▀▀▀▀        \(FileManager.default.currentDirectoryPath)
+    ▀▀▀▀
+────────────────────────────────────────────────────────────
+""")
     let runtime = try await AgentRuntime(config: config)
     await ToolRegistry.reloadMCPTools()
     let session = AgentSession(runtime: runtime)

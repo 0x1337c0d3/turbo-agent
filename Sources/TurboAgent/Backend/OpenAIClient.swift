@@ -317,10 +317,47 @@ final class OpenAIClient: @unchecked Sendable {
       let parameters: JSONValue
     }
 
+    struct ORContentPart: Encodable {
+      let type: String
+      let text: String
+    }
+
+    enum ORResponsesInputItem: Encodable {
+      case user(content: [ORContentPart])
+      case assistant(content: [ORContentPart])
+      case functionCall(call_id: String, name: String, arguments: String)
+      case functionCallOutput(call_id: String, output: String)
+
+      func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .user(let content):
+          try container.encode("user", forKey: .role)
+          try container.encode(content, forKey: .content)
+        case .assistant(let content):
+          try container.encode("assistant", forKey: .role)
+          try container.encode(content, forKey: .content)
+        case .functionCall(let call_id, let name, let arguments):
+          try container.encode("function_call", forKey: .type)
+          try container.encode(call_id, forKey: .call_id)
+          try container.encode(name, forKey: .name)
+          try container.encode(arguments, forKey: .arguments)
+        case .functionCallOutput(let call_id, let output):
+          try container.encode("function_call_output", forKey: .type)
+          try container.encode(call_id, forKey: .call_id)
+          try container.encode(output, forKey: .output)
+        }
+      }
+
+      enum CodingKeys: String, CodingKey {
+        case role, content, type, call_id, name, arguments, output
+      }
+    }
+
     struct ORResponsesRequest: Encodable {
       let model: String
       let instructions: String?
-      let input: [OpenAIRequest.Message]?
+      let input: [ORResponsesInputItem]?
       let tools: [ORResponsesTool]?
     }
 
@@ -328,13 +365,33 @@ final class OpenAIClient: @unchecked Sendable {
     let httpBody: Data
 
     if useResponsesApi {
+      var orInput: [ORResponsesInputItem] = []
+      for msg in messages {
+        if msg.role == .system {
+          continue // handled in instructions above
+        } else if msg.role == .user {
+          let parts = [ORContentPart(type: "input_text", text: msg.content ?? "")]
+          orInput.append(.user(content: parts))
+        } else if msg.role == .assistant {
+          if let content = msg.content, !content.isEmpty {
+            let parts = [ORContentPart(type: "output_text", text: content)]
+            orInput.append(.assistant(content: parts))
+          }
+          for tc in msg.toolCalls {
+            orInput.append(.functionCall(call_id: tc.id, name: tc.name, arguments: (try? tc.arguments.encoded()) ?? "{}"))
+          }
+        } else if msg.role == .tool {
+          orInput.append(.functionCallOutput(call_id: msg.toolCallID ?? "", output: msg.content ?? ""))
+        }
+      }
+      
       let orTools = tools?.map { t in
         ORResponsesTool(type: "function", name: t.name, description: t.description, parameters: t.parameters)
       }
       let requestPayload = ORResponsesRequest(
         model: modelName,
         instructions: systemInstruction,
-        input: filteredMessages,
+        input: orInput,
         tools: (orTools != nil && !orTools!.isEmpty) ? orTools : nil
       )
       httpBody = try encoder.encode(requestPayload)
